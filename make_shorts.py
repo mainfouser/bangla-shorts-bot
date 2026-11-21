@@ -1,1137 +1,356 @@
-
 import os
 import json
+import time
+import random
 import asyncio
-import subprocess
 import requests
+import subprocess
 import gspread
 import edge_tts
-import traceback
-import time
-import re
-
-from datetime import datetime, timezone
-from PIL import Image, ImageDraw, ImageFont
-
 from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips
 
-from moviepy.editor import (
-    VideoFileClip,
-    AudioFileClip,
-    ImageClip,
-    CompositeVideoClip,
-    CompositeAudioClip,
-    concatenate_videoclips
-)
-
-import moviepy.audio.fx.all as afx
-
-
-# =========================================================
-# CONFIGURATION
-# =========================================================
-
-BRAND_NAME = "Home BD Info  |  homebdinfo.com"
-
-VOICE_NAME = "bn-IN-BashkarNeural"
-
-BGM_VOLUME = 0.10
-
-OUTPUT_FILE = "final_short.mp4"
-VOICE_FILE = "voice.mp3"
-
+# ============================================================
+# 1. CONFIGURATION & ENVIRONMENT VARIABLES
+# ============================================================
 SHEET_NAME = "Shorts_Queue"
+SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
+GOOGLE_CREDS_JSON = os.environ.get("GOOGLE_CREDENTIALS")
+PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "mainfouser/bangla-shorts-bot")
 
-MAX_VIDEO_DURATION = 60
-
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive"
-]
-
-CLAIM_TIMEOUT_MINUTES = 90
-
-LOCK_FILE = ".shorts_generator.lock"
+VOICE_NAME = "bn-BD-NabanitaNeural"
 
 
-# =========================================================
-# ENVIRONMENT VALIDATION
-# =========================================================
-
-REQUIRED_ENV = [
-    "GOOGLE_CREDENTIALS",
-    "SHEET_ID",
-    "PIXABAY_API_KEY",
-    "TELEGRAM_BOT_TOKEN",
-    "TELEGRAM_CHAT_ID",
-    "DRIVE_FOLDER_ID"
-]
-
-for key in REQUIRED_ENV:
-
-    if not os.environ.get(key):
-        raise ValueError(
-            f"Environment Variable পাওয়া যায়নি: {key}"
-        )
-
-
-# =========================================================
-# GOOGLE CONNECTION
-# =========================================================
-
-creds_dict = json.loads(
-    os.environ["GOOGLE_CREDENTIALS"]
-)
-
-creds = Credentials.from_service_account_info(
-    creds_dict,
-    scopes=SCOPES
-)
-
-client = gspread.authorize(creds)
-
-sheet = client.open_by_key(
-    os.environ["SHEET_ID"]
-).worksheet(SHEET_NAME)
-
-drive_service = build(
-    "drive",
-    "v3",
-    credentials=creds,
-    cache_discovery=False
-)
-
-DRIVE_FOLDER_ID = os.environ["DRIVE_FOLDER_ID"]
-
-
-# =========================================================
-# GOOGLE SHEET HEADER MAPPING
-# =========================================================
-
-headers = sheet.row_values(1)
-
-COL = {
-    str(name).strip(): index + 1
-    for index, name in enumerate(headers)
-    if str(name).strip()
-}
-
-REQUIRED_HEADERS = [
-    "Post ID",
-    "Date Added",
-    "Post Title",
-    "Post URL",
-    "Shorts Title (YT)",
-    "Bangla Voiceover Script",
-    "Image Search Keywords (English)",
-    "Status",
-    "Telegram Video File ID",
-    "Telegram Message ID",
-    "Drive File ID",
-    "Drive File URL",
-    "Video Status",
-    "Approval Status",
-    "YouTube Status",
-    "YouTube Video ID",
-    "YouTube URL",
-    "YouTube Published At",
-    "Facebook Status",
-    "Facebook Video ID",
-    "Facebook URL",
-    "Facebook Published At",
-    "Cleanup After",
-    "Cleanup Status",
-    "Last Error"
-]
-
-missing = [
-    h for h in REQUIRED_HEADERS
-    if h not in COL
-]
-
-if missing:
-
-    raise ValueError(
-        "Google Sheet-এ প্রয়োজনীয় Header পাওয়া যায়নি: "
-        + ", ".join(missing)
-    )
-
-
-def update_field(row, field, value):
-
-    sheet.update_cell(
-        row,
-        COL[field],
-        value
-    )
-
-
-def update_fields(row, data):
-
-    for field, value in data.items():
-
-        update_field(
-            row,
-            field,
-            value
-        )
-
-
-def get_row_data(row_number):
-
-    values = sheet.row_values(row_number)
-
-    result = {}
-
-    for field, col_number in COL.items():
-
-        index = col_number - 1
-
-        result[field] = (
-            values[index]
-            if index < len(values)
-            else ""
-        )
-
-    return result
-
-
-# =========================================================
-# LOCAL LOCK
-# =========================================================
-
-def acquire_local_lock():
-
-    if os.path.exists(LOCK_FILE):
-
-        lock_age = (
-            time.time()
-            - os.path.getmtime(LOCK_FILE)
-        )
-
-        if lock_age < CLAIM_TIMEOUT_MINUTES * 60:
-
-            raise RuntimeError(
-                "অন্য একটি Shorts Generator ইতিমধ্যে চলছে।"
-            )
-
-        os.remove(LOCK_FILE)
-
-    with open(LOCK_FILE, "w") as lock:
-
-        lock.write(
-            datetime.now(timezone.utc).isoformat()
-        )
-
-
-def release_local_lock():
-
-    if os.path.exists(LOCK_FILE):
-
-        os.remove(LOCK_FILE)
-
-
-# =========================================================
-# BANGLA VOICE GENERATION
-# =========================================================
-
-async def generate_bangla_voice(text, output_file):
-
-    natural_text = (
-        text.replace("।", "... ")
-        .replace("?", "?.. ")
-        .replace("!", "!.. ")
-    )
-
-    raw_voice = "raw_voice.mp3"
-
-    communicate = edge_tts.Communicate(
-        natural_text,
-        VOICE_NAME,
-        rate="-2%",
-        pitch="-3Hz"
-    )
-
-    await communicate.save(raw_voice)
-
-    ffmpeg_cmd = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        raw_voice,
-        "-af",
-        (
-            "highpass=f=85,"
-            "equalizer=f=250:width_type=h:width=150:g=3,"
-            "equalizer=f=3500:width_type=h:width=1000:g=2,"
-            "acompressor=threshold=-18dB:ratio=3:attack=5:release=50"
-        ),
-        "-ar",
-        "44100",
-        "-b:a",
-        "192k",
-        output_file
+# ============================================================
+# 2. GOOGLE SHEET CONNECTION
+# ============================================================
+def get_sheet():
+    if not GOOGLE_CREDS_JSON or not SPREADSHEET_ID:
+        raise ValueError("GOOGLE_CREDENTIALS বা SPREADSHEET_ID পাওয়া যায়নি।")
+    
+    creds_dict = json.loads(GOOGLE_CREDS_JSON)
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
     ]
-
-    subprocess.run(
-        ffmpeg_cmd,
-        check=True
-    )
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    client = gspread.authorize(creds)
+    return client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
 
 
-# =========================================================
-# PIXABAY STOCK VIDEO DOWNLOAD
-# =========================================================
+def get_header_map(sheet):
+    headers = sheet.row_values(1)
+    return {header.strip(): idx + 1 for idx, header in enumerate(headers)}
 
-def download_stock_videos(keywords, count=4):
 
-    api_key = os.environ["PIXABAY_API_KEY"]
+def update_cells(sheet, row_num, header_map, updates):
+    cells_to_update = []
+    for col_name, value in updates.items():
+        if col_name in header_map:
+            col_idx = header_map[col_name]
+            cells_to_update.append(gspread.Cell(row=row_num, col=col_idx, value=str(value)))
+    if cells_to_update:
+        sheet.update_cells(cells_to_update)
 
-    keyword_list = [
-        x.strip()
-        for x in keywords.split(",")
-        if x.strip()
+
+# ============================================================
+# 3. AUDIO GENERATION (EDGE-TTS + FFMPEG)
+# ============================================================
+async def _generate_tts(text, output_file):
+    communicate = edge_tts.Communicate(text, VOICE_NAME)
+    await communicate.save(output_file)
+
+
+def create_voiceover(script_text):
+    raw_audio = "raw_voice.mp3"
+    final_audio = "voice.mp3"
+    
+    asyncio.run(_generate_tts(script_text, raw_audio))
+    
+    cmd = [
+        "ffmpeg", "-y", "-i", raw_audio,
+        "-ar", "44100", "-ac", "1", "-b:a", "192k",
+        final_audio
     ]
+    subprocess.run(cmd, check=True)
+    return final_audio
 
-    if not keyword_list:
 
-        keyword_list = ["technology"]
+# ============================================================
+# 4. STOCK VIDEO DOWNLOADER (PEXELS)
+# ============================================================
+def download_pexels_videos(keywords, target_duration):
+    if not PEXELS_API_KEY:
+        raise ValueError("PEXELS_API_KEY পাওয়া যায়নি।")
+        
+    headers = {"Authorization": PEXELS_API_KEY}
+    downloaded_files = []
+    total_dur = 0.0
+    
+    kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
+    if not kw_list:
+        kw_list = ["bangladesh", "nature", "technology"]
 
-    base_url = "https://pixabay.com/api/videos/"
-
-    selected = []
-
-    for keyword in keyword_list[:3]:
-
-        params = {
-            "key": api_key,
-            "q": keyword,
-            "per_page": 20,
-            "safesearch": "true"
-        }
-
-        response = requests.get(
-            base_url,
-            params=params,
-            timeout=60
-        )
-
-        response.raise_for_status()
-
-        hits = response.json().get(
-            "hits",
-            []
-        )
-
-        for item in hits:
-
-            videos = item.get(
-                "videos",
-                {}
-            )
-
-            video_data = (
-                videos.get("large")
-                or videos.get("medium")
-                or videos.get("small")
-            )
-
-            if not video_data:
-                continue
-
-            selected.append(video_data["url"])
-
-            if len(selected) >= count:
-                break
-
-        if len(selected) >= count:
-            break
-
-    # Fallback
-    if not selected:
-
-        params = {
-            "key": api_key,
-            "q": "technology",
-            "per_page": 10,
-            "safesearch": "true"
-        }
-
-        response = requests.get(
-            base_url,
-            params=params,
-            timeout=60
-        )
-
-        response.raise_for_status()
-
-        hits = response.json().get(
-            "hits",
-            []
-        )
-
-        for item in hits:
-
-            videos = item.get(
-                "videos",
-                {}
-            )
-
-            video_data = (
-                videos.get("medium")
-                or videos.get("small")
-            )
-
-            if video_data:
-                selected.append(
-                    video_data["url"]
+    idx = 0
+    while total_dur < target_duration and idx < 15:
+        query = kw_list[idx % len(kw_list)]
+        url = f"https://api.pexels.com/videos/search?query={query}&orientation=portrait&size=medium&per_page=5"
+        res = requests.get(url, headers=headers, timeout=15)
+        
+        if res.status_code == 200:
+            videos = res.json().get("videos", [])
+            if videos:
+                video = random.choice(videos)
+                video_files = video.get("video_files", [])
+                chosen_file = next(
+                    (vf for vf in video_files if vf.get("width", 0) >= 720 and vf.get("file_type") == "video/mp4"),
+                    video_files[0] if video_files else None
                 )
+                if chosen_file:
+                    v_url = chosen_file["link"]
+                    file_name = f"clip_{idx}.mp4"
+                    with requests.get(v_url, stream=True, timeout=30) as r:
+                        r.raise_for_status()
+                        with open(file_name, "wb") as f:
+                            for chunk in r.iter_content(chunk_size=8192):
+                                f.write(chunk)
+                    
+                    clip = VideoFileClip(file_name)
+                    total_dur += clip.duration
+                    clip.close()
+                    downloaded_files.append(file_name)
+        idx += 1
 
-            if len(selected) >= count:
-                break
+    if not downloaded_files:
+        raise RuntimeError("Pexels থেকে কোনো ব্যাকগ্রাউন্ড ভিডিও ডাউনলোড করা যায়নি।")
+        
+    return downloaded_files
 
-    if not selected:
 
-        raise RuntimeError(
-            "Pixabay থেকে কোনো ভিডিও পাওয়া যায়নি।"
-        )
+# ============================================================
+# 5. VIDEO ASSEMBLY (MOVIEPY)
+# ============================================================
+def build_short_video(audio_path, clip_paths, output_path="final_short.mp4"):
+    audio = AudioFileClip(audio_path)
+    target_duration = audio.duration + 0.5
+    
+    clips = []
+    current_dur = 0.0
+    
+    for path in clip_paths:
+        if current_dur >= target_duration:
+            break
+        clip = VideoFileClip(path).without_audio()
+        
+        clip = clip.resize(height=1920)
+        if clip.w < 1080:
+            clip = clip.resize(width=1080)
+        clip = clip.crop(x_center=clip.w / 2, y_center=clip.h / 2, width=1080, height=1920)
+        
+        needed = target_duration - current_dur
+        if clip.duration > needed:
+            clip = clip.subclip(0, needed)
+            
+        clips.append(clip)
+        current_dur += clip.duration
 
-    files = []
+    final_video = concatenate_videoclips(clips, method="compose")
+    final_video = final_video.set_audio(audio)
+    
+    final_video.write_videofile(
+        output_path,
+        fps=30,
+        codec="libx264",
+        audio_codec="aac",
+        threads=4,
+        preset="medium"
+    )
+    
+    audio.close()
+    final_video.close()
+    for c in clips:
+        c.close()
+        
+    print("ভিডিও তৈরি সফল।")
+    return output_path
 
-    for idx, video_url in enumerate(selected):
 
-        response = requests.get(
-            video_url,
+# ============================================================
+# 6. UPLOAD TO GITHUB RELEASES (REPLACES GOOGLE DRIVE)
+# ============================================================
+def upload_to_github_release(file_path, file_name):
+    if not GITHUB_TOKEN:
+        raise ValueError("GITHUB_TOKEN পাওয়া যায়নি।")
+
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28"
+    }
+
+    tag_name = f"vid-{int(time.time())}"
+    release_url = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
+    payload = {
+        "tag_name": tag_name,
+        "name": f"Shorts Video {tag_name}",
+        "body": "Temporary video storage for Shorts automation",
+        "draft": False,
+        "prerelease": True
+    }
+
+    res = requests.post(release_url, headers=headers, json=payload, timeout=30)
+    res.raise_for_status()
+    release_data = res.json()
+
+    release_id = str(release_data["id"])
+    upload_url = release_data["upload_url"].split("{")[0]
+
+    upload_headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Content-Type": "video/mp4"
+    }
+    
+    with open(file_path, "rb") as f:
+        up_res = requests.post(
+            upload_url,
+            headers=upload_headers,
+            params={"name": file_name},
+            data=f,
             timeout=120
         )
+        up_res.raise_for_status()
+        asset_data = up_res.json()
 
-        response.raise_for_status()
-
-        filename = f"clip_{idx}.mp4"
-
-        with open(filename, "wb") as f:
-
-            f.write(response.content)
-
-        if os.path.getsize(filename) == 0:
-
-            raise RuntimeError(
-                "ডাউনলোড করা Pixabay ভিডিও খালি।"
-            )
-
-        files.append(filename)
-
-    return files
+    download_url = asset_data["browser_download_url"]
+    print(f"GitHub Release আপলোড সফল: {download_url}")
+    return release_id, download_url
 
 
-# =========================================================
-# BRAND OVERLAY
-# =========================================================
+# ============================================================
+# 7. SEND TO TELEGRAM FOR APPROVAL
+# ============================================================
+def send_telegram_approval(video_path, row_num, title, download_url):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        raise ValueError("TELEGRAM_BOT_TOKEN বা TELEGRAM_CHAT_ID পাওয়া যায়নি।")
 
-def create_brand_overlay(
-    width=1080,
-    height=1920,
-    output_png="brand_overlay.png"
-):
-
-    canvas = Image.new(
-        "RGBA",
-        (width, height),
-        (0, 0, 0, 0)
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVideo"
+    
+    caption = (
+        f"🎬 <b>নতুন Shorts ভিডিও প্রস্তুত!</b>\n\n"
+        f"📌 <b>Title:</b> {title}\n"
+        f"📊 <b>Sheet Row:</b> {row_num}\n"
+        f"🔗 <a href='{download_url}'>Direct Video Link</a>\n\n"
+        f"পাবলিশ করার জন্য নিচে Approve বাটনে ক্লিক করুন:"
     )
 
-    draw = ImageDraw.Draw(canvas)
-
-    if os.path.exists("logo.png"):
-
-        badge_size = 150
-
-        badge = Image.new(
-            "RGBA",
-            (badge_size, badge_size),
-            (0, 0, 0, 0)
-        )
-
-        b_draw = ImageDraw.Draw(badge)
-
-        b_draw.ellipse(
-            (0, 0, badge_size - 1, badge_size - 1),
-            fill=(255, 255, 255, 245),
-            outline=(22, 163, 74, 255),
-            width=6
-        )
-
-        logo = Image.open(
-            "logo.png"
-        ).convert("RGBA")
-
-        inner_size = 105
-
-        logo = logo.resize(
-            (inner_size, inner_size),
-            Image.LANCZOS
-        )
-
-        offset = (
-            badge_size - inner_size
-        ) // 2
-
-        badge.paste(
-            logo,
-            (offset, offset),
-            logo
-        )
-
-        canvas.paste(
-            badge,
-            (width - badge_size - 55, 95),
-            badge
-        )
-
-    bar_w = 720
-    bar_h = 74
-
-    x1 = (width - bar_w) // 2
-    y1 = height - 290
-
-    draw.rounded_rectangle(
-        (
-            x1,
-            y1,
-            x1 + bar_w,
-            y1 + bar_h
-        ),
-        radius=37,
-        fill=(15, 23, 42, 205),
-        outline=(22, 163, 74, 240),
-        width=4
-    )
-
-    try:
-
-        font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            31
-        )
-
-    except Exception:
-
-        font = ImageFont.load_default()
-
-    draw.text(
-        (
-            width // 2,
-            y1 + bar_h // 2
-        ),
-        BRAND_NAME,
-        font=font,
-        fill=(255, 255, 255, 250),
-        anchor="mm"
-    )
-
-    canvas.save(output_png)
-
-    return output_png
-
-
-# =========================================================
-# VIDEO RENDERING
-# =========================================================
-
-def create_short_video(
-    audio_path,
-    video_paths,
-    output_path
-):
-
-    if not video_paths:
-
-        raise RuntimeError(
-            "কোনো ভিডিও ক্লিপ পাওয়া যায়নি।"
-        )
-
-    voice_audio = AudioFileClip(
-        audio_path
-    )
-
-    target_duration = min(
-        voice_audio.duration,
-        MAX_VIDEO_DURATION
-    )
-
-    if voice_audio.duration > MAX_VIDEO_DURATION:
-
-        voice_audio.close()
-
-        raise RuntimeError(
-            "Voiceover ৬০ সেকেন্ডের বেশি। Script ছোট করুন।"
-        )
-
-    clips = []
-
-    base_video = None
-    final_video = None
-    bgm = None
-
-    W, H = 1080, 1920
-
-    try:
-
-        current_duration = 0
-        idx = 0
-
-        while current_duration < target_duration:
-
-            clip_path = video_paths[
-                idx % len(video_paths)
-            ]
-
-            clip = VideoFileClip(
-                clip_path
-            ).without_audio()
-
-            if clip.duration <= 0:
-
-                clip.close()
-
-                raise RuntimeError(
-                    "ভিডিও ক্লিপের Duration ভুল।"
-                )
-
-            clip_ratio = clip.w / clip.h
-            target_ratio = W / H
-
-            if clip_ratio > target_ratio:
-
-                clip = clip.resize(
-                    height=H
-                )
-
-                clip = clip.crop(
-                    x_center=clip.w / 2,
-                    width=W
-                )
-
-            else:
-
-                clip = clip.resize(
-                    width=W
-                )
-
-                clip = clip.crop(
-                    y_center=clip.h / 2,
-                    height=H
-                )
-
-            clips.append(clip)
-
-            current_duration += clip.duration
-
-            idx += 1
-
-        base_video = concatenate_videoclips(
-            clips,
-            method="compose"
-        ).subclip(
-            0,
-            target_duration
-        )
-
-        overlay_path = create_brand_overlay(
-            W,
-            H
-        )
-
-        brand_clip = ImageClip(
-            overlay_path
-        ).set_duration(
-            target_duration
-        )
-
-        if os.path.exists("bgm.mp3"):
-
-            bgm = AudioFileClip(
-                "bgm.mp3"
-            )
-
-            bgm = afx.audio_loop(
-                bgm,
-                duration=target_duration
-            ).volumex(
-                BGM_VOLUME
-            )
-
-            bgm = bgm.audio_fadeout(1.5)
-
-            final_audio = CompositeAudioClip(
-                [
-                    voice_audio,
-                    bgm
-                ]
-            )
-
-        else:
-
-            final_audio = voice_audio
-
-        final_video = CompositeVideoClip(
+    reply_markup = {
+        "inline_keyboard": [
             [
-                base_video,
-                brand_clip
+                {"text": "✅ Approve", "callback_data": f"APPROVE_{row_num}"},
+                {"text": "❌ Reject", "callback_data": f"REJECT_{row_num}"}
             ]
-        ).set_audio(
-            final_audio
-        )
-
-        final_video.write_videofile(
-            output_path,
-            fps=30,
-            codec="libx264",
-            audio_codec="aac",
-            bitrate="4000k",
-            threads=2,
-            logger="bar"
-        )
-
-    finally:
-
-        if final_video:
-            final_video.close()
-
-        if base_video:
-            base_video.close()
-
-        if bgm:
-            bgm.close()
-
-        voice_audio.close()
-
-        for clip in clips:
-
-            try:
-                clip.close()
-            except Exception:
-                pass
-
-
-# =========================================================
-# GOOGLE DRIVE UPLOAD
-# =========================================================
-
-def upload_to_drive(video_path, title):
-
-    safe_title = re.sub(
-        r'[\\/:*?"<>|]',
-        "",
-        title
-    ).strip()
-
-    file_metadata = {
-        "name": safe_title[:140] + ".mp4",
-        "parents": [
-            DRIVE_FOLDER_ID
         ]
     }
 
-    media = MediaFileUpload(
-        video_path,
-        mimetype="video/mp4",
-        resumable=True,
-        chunksize=8 * 1024 * 1024
-    )
-
-    uploaded = drive_service.files().create(
-        body=file_metadata,
-        media_body=media,
-        fields="id,name,webViewLink"
-    ).execute()
-
-    file_id = uploaded["id"]
-
-    file_url = uploaded.get(
-        "webViewLink",
-        f"https://drive.google.com/file/d/{file_id}/view"
-    )
-
-    return file_id, file_url
-
-
-# =========================================================
-# TELEGRAM VIDEO + APPROVAL BUTTONS
-# =========================================================
-
-def send_to_telegram(
-    video_path,
-    title,
-    row_number
-):
-
-    bot_token = os.environ[
-        "TELEGRAM_BOT_TOKEN"
-    ]
-
-    chat_id = os.environ[
-        "TELEGRAM_CHAT_ID"
-    ]
-
-    tg_url = (
-        f"https://api.telegram.org/"
-        f"bot{bot_token}/sendVideo"
-    )
-
-    keyboard = {
-        "inline_keyboard": [[
-            {
-                "text": "✅ Approve (YT-এ পোস্ট করুন)",
-                "callback_data": f"APPROVE_{row_number}"
-            },
-            {
-                "text": "❌ Reject (বাতিল করুন)",
-                "callback_data": f"REJECT_{row_number}"
-            }
-        ]]
-    }
-
-    caption = (
-        "🎬 নতুন ব্র্যান্ডেড শর্টস প্রস্তুত!\n\n"
-        f"📌 টাইটেল: {title}\n\n"
-        "অনুমোদন দিতে নিচের বাটনে ক্লিক করুন:"
-    )
-
-    with open(video_path, "rb") as video:
-
-        response = requests.post(
-            tg_url,
+    with open(video_path, "rb") as video_file:
+        res = requests.post(
+            url,
             data={
-                "chat_id": chat_id,
+                "chat_id": TELEGRAM_CHAT_ID,
                 "caption": caption,
-                "reply_markup": json.dumps(keyboard)
+                "parse_mode": "HTML",
+                "reply_markup": json.dumps(reply_markup)
             },
-            files={
-                "video": video
-            },
-            timeout=600
+            files={"video": video_file},
+            timeout=120
         )
+        res.raise_for_status()
+        result = res.json()
 
-    response.raise_for_status()
-
-    result = response.json()
-
-    if not result.get("ok"):
-
-        raise RuntimeError(
-            "Telegram Error: " + str(result)
-        )
-
-    return result["result"]
+    tg_file_id = result["result"]["video"]["file_id"]
+    tg_msg_id = result["result"]["message_id"]
+    print(f"Telegram-এ পাঠানো হয়েছে। Message ID: {tg_msg_id}")
+    return tg_file_id, tg_msg_id
 
 
-# =========================================================
-# SELECT FIRST SCRIPT_READY ROW
-# =========================================================
+# ============================================================
+# 8. MAIN EXECUTION FLOW
+# ============================================================
+def process_row(sheet, row_num, row_data, header_map):
+    title = row_data[header_map["Shorts Title (YT)"] - 1]
+    script = row_data[header_map["Bangla Voiceover Script"] - 1]
+    keywords = row_data[header_map["Image Search Keywords (English)"] - 1]
 
-def select_row():
+    print(f"ভিডিও তৈরি শুরু: Row {row_num} - {title}")
 
-    records = sheet.get_all_records()
+    update_cells(sheet, row_num, header_map, {
+        "Status": "PROCESSING",
+        "Video Status": "GENERATING"
+    })
 
-    for idx, item in enumerate(records):
+    audio_path = create_voiceover(script)
+    audio_clip = AudioFileClip(audio_path)
+    duration = audio_clip.duration
+    audio_clip.close()
 
-        row_number = idx + 2
+    clip_paths = download_pexels_videos(keywords, duration)
+    video_path = build_short_video(audio_path, clip_paths, "final_short.mp4")
 
-        status = str(
-            item.get("Status", "")
-        ).strip()
+    file_name = f"short_row_{row_num}_{int(time.time())}.mp4"
+    release_id, release_url = upload_to_github_release(video_path, file_name)
 
-        title = str(
-            item.get("Shorts Title (YT)", "")
-        ).strip()
+    tg_file_id, tg_msg_id = send_telegram_approval(video_path, row_num, title, release_url)
 
-        script_text = str(
-            item.get("Bangla Voiceover Script", "")
-        ).strip()
+    update_cells(sheet, row_num, header_map, {
+        "Status": "PENDING_APPROVAL",
+        "Video Status": "READY",
+        "Drive File ID": release_id,
+        "Drive File URL": release_url,
+        "Telegram Video File ID": tg_file_id,
+        "Telegram Message ID": tg_msg_id,
+        "Last Error": ""
+    })
+    print(f"Row {row_num} এর সম্পূর্ণ প্রক্রিয়া সফলভাবে শেষ হয়েছে!")
 
-        if status != "SCRIPT_READY":
-            continue
-
-        if not title or not script_text:
-
-            print(
-                f"Row {row_number}: Title অথবা Script খালি।"
-            )
-
-            continue
-
-        return row_number, item
-
-    return None, None
-
-
-# =========================================================
-# PROCESS ONE SHORT
-# =========================================================
-
-def process_row(row_number, item):
-
-    # Claim row before work starts
-    update_fields(
-        row_number,
-        {
-            "Status": "PROCESSING",
-            "Video Status": "GENERATING",
-            "Approval Status": "PENDING",
-            "Last Error": ""
-        }
-    )
-
-    # Read latest data after claiming
-    item = get_row_data(
-        row_number
-    )
-
-    title = str(
-        item.get("Shorts Title (YT)", "")
-    ).strip()
-
-    script_text = str(
-        item.get("Bangla Voiceover Script", "")
-    ).strip()
-
-    keywords = str(
-        item.get("Image Search Keywords (English)", "")
-    ).strip()
-
-    if not title or not script_text:
-
-        raise ValueError(
-            "Title অথবা Voiceover Script খালি।"
-        )
-
-    print(
-        f"ভিডিও তৈরি শুরু: Row {row_number} - {title}"
-    )
-
-    # Generate voice
-    asyncio.run(
-        generate_bangla_voice(
-            script_text,
-            VOICE_FILE
-        )
-    )
-
-    # Download stock clips
-    clips = download_stock_videos(
-        keywords
-    )
-
-    # Render final video
-    create_short_video(
-        VOICE_FILE,
-        clips,
-        OUTPUT_FILE
-    )
-
-    if not os.path.exists(OUTPUT_FILE):
-
-        raise RuntimeError(
-            "Final video তৈরি হয়নি।"
-        )
-
-    if os.path.getsize(OUTPUT_FILE) == 0:
-
-        raise RuntimeError(
-            "Final video ফাইল খালি।"
-        )
-
-    print(
-        "ভিডিও তৈরি সফল।"
-    )
-
-    # Refresh Sheet data
-    item = get_row_data(
-        row_number
-    )
-
-    drive_file_id = str(
-        item.get("Drive File ID", "")
-    ).strip()
-
-    drive_file_url = str(
-        item.get("Drive File URL", "")
-    ).strip()
-
-    # Upload to Drive only if no ID exists
-    if not drive_file_id:
-
-        drive_file_id, drive_file_url = upload_to_drive(
-            OUTPUT_FILE,
-            title
-        )
-
-        update_fields(
-            row_number,
-            {
-                "Drive File ID": drive_file_id,
-                "Drive File URL": drive_file_url,
-                "Video Status": "DRIVE_UPLOADED"
-            }
-        )
-
-    print(
-        "Google Drive Upload সফল।"
-    )
-
-    # Read latest Telegram details
-    item = get_row_data(
-        row_number
-    )
-
-    old_message_id = str(
-        item.get("Telegram Message ID", "")
-    ).strip()
-
-    # Do not send duplicate Telegram message
-    if old_message_id:
-
-        print(
-            "Telegram Message ID আগে থেকেই আছে।"
-        )
-
-        return
-
-    # Send video to Telegram
-    tg_result = send_to_telegram(
-        OUTPUT_FILE,
-        title,
-        row_number
-    )
-
-    msg_id = str(
-        tg_result["message_id"]
-    )
-
-    tg_file_id = str(
-        tg_result["video"]["file_id"]
-    )
-
-    # Save Telegram result
-    update_fields(
-        row_number,
-        {
-            "Telegram Video File ID": tg_file_id,
-            "Telegram Message ID": msg_id,
-            "Video Status": "READY_FOR_APPROVAL",
-            "Approval Status": "PENDING",
-            "Status": "PENDING_APPROVAL",
-            "Last Error": ""
-        }
-    )
-
-    print(
-        "Telegram-এ ভিডিও পাঠানো সফল।"
-    )
-
-
-# =========================================================
-# MAIN
-# =========================================================
 
 def main():
+    sheet = get_sheet()
+    header_map = get_header_map(sheet)
+    all_rows = sheet.get_all_values()
 
-    row_number = None
+    selected_row = None
+    selected_data = None
+
+    for idx in range(1, len(all_rows)):
+        row = all_rows[idx]
+        status = row[header_map["Status"] - 1].strip() if len(row) >= header_map["Status"] else ""
+        if status == "SCRIPT_READY":
+            selected_row = idx + 1
+            selected_data = row
+            break
+
+    if not selected_row:
+        print("প্রসেস করার মতো কোনো SCRIPT_READY রো পাওয়া যায়নি।")
+        return
+
+    print(f"নির্বাচিত Google Sheet Row: {selected_row}")
 
     try:
-
-        acquire_local_lock()
-
-        row_number, item = select_row()
-
-        if row_number is None:
-
-            print(
-                "নতুন SCRIPT_READY Row পাওয়া যায়নি।"
-            )
-
-            return
-
-        print(
-            f"নির্বাচিত Google Sheet Row: {row_number}"
-        )
-
-        process_row(
-            row_number,
-            item
-        )
-
-        print(
-            "Shorts Processing সম্পন্ন।"
-        )
-
-    except Exception as error:
-
-        error_text = str(error)[:1000]
-
-        print(
-            "ERROR:",
-            error_text
-        )
-
-        traceback.print_exc()
-
-        if row_number:
-
-            try:
-
-                update_fields(
-                    row_number,
-                    {
-                        "Video Status": "ERROR",
-                        "Status": "ERROR",
-                        "Last Error": error_text
-                    }
-                )
-
-            except Exception as sheet_error:
-
-                print(
-                    "Google Sheet Update Error:",
-                    str(sheet_error)
-                )
-
+        process_row(sheet, selected_row, selected_data, header_map)
+    except Exception as e:
+        error_msg = str(e)[:1000]
+        print(f"ERROR: {error_msg}")
+        update_cells(sheet, selected_row, header_map, {
+            "Status": "ERROR",
+            "Video Status": "FAILED",
+            "Last Error": error_msg
+        })
         raise
 
-    finally:
-
-        temporary_files = [
-            "raw_voice.mp3",
-            VOICE_FILE,
-            OUTPUT_FILE,
-            "brand_overlay.png"
-        ]
-
-        for idx in range(20):
-
-            temporary_files.append(
-                f"clip_{idx}.mp4"
-            )
-
-        for filename in temporary_files:
-
-            if os.path.exists(filename):
-
-                try:
-                    os.remove(filename)
-
-                except Exception:
-                    pass
-
-        release_local_lock()
-
-
-# =========================================================
-# ENTRY POINT
-# =========================================================
 
 if __name__ == "__main__":
     main()
