@@ -111,15 +111,18 @@ def send_to_telegram(video_path, title, row_index):
         return requests.post(tg_base, data=payload, files={"video": vid}).json()
 
 def main():
-    rows = sheet.get_all_values()
-    for i in range(1, len(rows)):
-        row = rows[i]
-        # কলাম ইনডেক্স: 4=Shorts Title, 5=Script, 6=Keywords, 7=Status
-        if len(row) > 7 and row == "SCRIPT_READY":
-            row_num = i + 1
-            title = row
-            script_text = row
-            keywords = row
+    records = sheet.get_all_records() # সরাসরি কলামের নাম ধরে সব ডেটা আনবে (কোনো ব্র্যাকেট লাগবে না)
+    print(f"মোট পোস্ট পাওয়া গেছে: {len(records)}")
+    
+    for idx, item in enumerate(records):
+        row_num = idx + 2 # হেডার ১ নম্বর রো হওয়ায় ডেটা ২ নম্বর রো থেকে শুরু
+        status = str(item.get("Status", "")).strip()
+        print(f"Row {row_num} Status: {status}")
+        
+        if status == "SCRIPT_READY":
+            title = str(item.get("Shorts Title (YT)", ""))
+            script_text = str(item.get("Bangla Voiceover Script", ""))
+            keywords = str(item.get("Image Search Keywords (English)", "bangladesh"))
             
             print(f"প্রসেসিং শুরু হচ্ছে (Row {row_num}): {title}")
             asyncio.run(generate_bangla_voice(script_text, "voice.mp3"))
