@@ -4,20 +4,23 @@ import asyncio
 import requests
 import gspread
 import edge_tts
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips
 
-# 1. Google Sheet ও Drive কানেকশন
+# 1. আধুনিক ও নির্ভুল Google Sheet ও Drive কানেকশন
 creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-scope = ["https://google.com", "https://googleapis.com"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+scopes = [
+    "https://googleapis.com",
+    "https://googleapis.com"
+]
+creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
 client = gspread.authorize(creds)
 sheet = client.open_by_key(os.environ["SHEET_ID"]).worksheet("Shorts_Queue")
 drive_service = build("drive", "v3", credentials=creds)
 
-# 2. বাংলা ভয়েসওভার তৈরি
+# 2. বাংলা ভয়েসওভার তৈরি (Microsoft Edge TTS)
 async def generate_bangla_voice(text, output_file):
     communicate = edge_tts.Communicate(text, "bn-BD-NabanitaNeural")
     await communicate.save(output_file)
@@ -26,7 +29,7 @@ async def generate_bangla_voice(text, output_file):
 def download_stock_videos(keywords, count=4):
     api_key = os.environ["PIXABAY_API_KEY"]
     video_files = []
-    first_keyword = keywords.split(",")[0].strip()
+    first_keyword = keywords.split(",").strip()
     query = requests.utils.quote(first_keyword)
     url = f"https://pixabay.com{api_key}&q={query}&per_page=10"
     
@@ -108,11 +111,12 @@ def main():
     rows = sheet.get_all_values()
     for i in range(1, len(rows)):
         row = rows[i]
-        if row[7] == "SCRIPT_READY":
+        # কলাম ইনডেক্স: 4=Shorts Title, 5=Script, 6=Keywords, 7=Status
+        if len(row) > 7 and row == "SCRIPT_READY":
             row_num = i + 1
-            title = row[4]
-            script_text = row[5]
-            keywords = row[6]
+            title = row
+            script_text = row
+            keywords = row
             
             print(f"প্রসেসিং শুরু হচ্ছে (Row {row_num}): {title}")
             asyncio.run(generate_bangla_voice(script_text, "voice.mp3"))
