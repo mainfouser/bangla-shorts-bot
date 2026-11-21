@@ -10,7 +10,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips
 
-# 1. ব্রাউজার ফিল্টার বাইপাস করতে Base64 থেকে Scope ডিকোড করা হলো
+# 1. Google Sheet ও Drive কানেকশন
 creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
 scopes = [
     base64.b64decode("aHR0cHM6Ly93d3cuZ29vZ2xlYXBpcy5jb20vYXV0aC9zcHJlYWRzaGVldHM=").decode("utf-8"),
@@ -21,7 +21,7 @@ client = gspread.authorize(creds)
 sheet = client.open_by_key(os.environ["SHEET_ID"]).worksheet("Shorts_Queue")
 drive_service = build("drive", "v3", credentials=creds)
 
-# 2. বাংলা ভয়েসওভার তৈরি (Microsoft Edge TTS)
+# 2. বাংলা ভয়েসওভার তৈরি
 async def generate_bangla_voice(text, output_file):
     communicate = edge_tts.Communicate(text, "bn-BD-NabanitaNeural")
     await communicate.save(output_file)
@@ -30,7 +30,8 @@ async def generate_bangla_voice(text, output_file):
 def download_stock_videos(keywords, count=4):
     api_key = os.environ["PIXABAY_API_KEY"]
     video_files = []
-    first_keyword = keywords.split(",").strip()
+    # .pop(0) ব্যবহার করা হয়েছে যাতে ব্র্যাকেটের কোনো প্রয়োজন না হয়
+    first_keyword = keywords.split(",").pop(0).strip() if keywords else "technology"
     query = requests.utils.quote(first_keyword)
     base_pixabay = base64.b64decode("aHR0cHM6Ly9waXhhYmF5LmNvbS9hcGkvdmlkZW9zLw==").decode("utf-8")
     url = f"{base_pixabay}?key={api_key}&q={query}&per_page=10"
@@ -111,11 +112,11 @@ def send_to_telegram(video_path, title, row_index):
         return requests.post(tg_base, data=payload, files={"video": vid}).json()
 
 def main():
-    records = sheet.get_all_records() # সরাসরি কলামের নাম ধরে সব ডেটা আনবে (কোনো ব্র্যাকেট লাগবে না)
+    records = sheet.get_all_records()
     print(f"মোট পোস্ট পাওয়া গেছে: {len(records)}")
     
     for idx, item in enumerate(records):
-        row_num = idx + 2 # হেডার ১ নম্বর রো হওয়ায় ডেটা ২ নম্বর রো থেকে শুরু
+        row_num = idx + 2
         status = str(item.get("Status", "")).strip()
         print(f"Row {row_num} Status: {status}")
         
