@@ -63,19 +63,15 @@ def notify_telegram(text):
     requests.post(tg_url, json={"chat_id": os.environ["TELEGRAM_CHAT_ID"], "text": text})
 
 def main():
-    rows = sheet.get_all_values()
-    for i in range(1, len(rows)):
-        row = rows[i]
-        if len(row) <= 8:
-            continue
-            
-        status = row
-        drive_file_id = row
+    records = sheet.get_all_records()
+    for idx, item in enumerate(records):
+        row_num = idx + 2
+        status = str(item.get("Status", "")).strip()
+        drive_file_id = str(item.get("Video Drive/Cloud URL", "")).strip()
         
         if status == "APPROVED" and drive_file_id and not drive_file_id.startswith("http"):
-            row_num = i + 1
-            title = row
-            post_url = row
+            title = str(item.get("Shorts Title (YT)", ""))
+            post_url = str(item.get("Post URL", ""))
             
             print(f"YouTube-এ আপলোড হচ্ছে (Row {row_num}): {title}")
             download_from_drive(drive_file_id, "yt_upload.mp4")
@@ -91,7 +87,8 @@ def main():
                 
         elif status == "REJECTED" and drive_file_id and not drive_file_id.startswith("http") and drive_file_id != "DELETED_FROM_DRIVE":
             drive_service.files().delete(fileId=drive_file_id).execute()
-            sheet.update_cell(i + 1, 9, "DELETED_FROM_DRIVE")
+            sheet.update_cell(row_num, 9, "DELETED_FROM_DRIVE")
 
 if __name__ == "__main__":
     main()
+
