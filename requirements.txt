@@ -1,9 +1,9 @@
+
 gspread
-oauth2client
+google-auth
+google-api-python-client
 edge-tts
 requests
 moviepy==1.0.3
 Pillow==9.5.0
-google-api-python-client
-google-auth
-google-auth-oauthlib
+imageio-ffmpeg
