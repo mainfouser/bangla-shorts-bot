@@ -3,20 +3,23 @@ import io
 import json
 import requests
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials as ServiceAccountCredentials
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 
-# Google Sheet ও Drive কানেকশন
+# 1. আধুনিক ও নির্ভুল Google Sheet ও Drive কানেকশন
 creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-scope = ["https://google.com", "https://googleapis.com"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+scopes = [
+    "https://googleapis.com",
+    "https://googleapis.com"
+]
+creds = ServiceAccountCredentials.from_service_account_info(creds_dict, scopes=scopes)
 client = gspread.authorize(creds)
 sheet = client.open_by_key(os.environ["SHEET_ID"]).worksheet("Shorts_Queue")
 drive_service = build("drive", "v3", credentials=creds)
 
-# YouTube API কানেকশন
+# 2. YouTube API কানেকশন
 yt_creds = Credentials(
     token=None,
     refresh_token=os.environ["YT_REFRESH_TOKEN"],
@@ -59,13 +62,16 @@ def main():
     rows = sheet.get_all_values()
     for i in range(1, len(rows)):
         row = rows[i]
-        status = row[7]
-        drive_file_id = row[8]
+        if len(row) <= 8:
+            continue
+            
+        status = row
+        drive_file_id = row
         
         if status == "APPROVED" and drive_file_id and not drive_file_id.startswith("http"):
             row_num = i + 1
-            title = row[4]
-            post_url = row[3]
+            title = row
+            post_url = row
             
             print(f"YouTube-এ আপলোড হচ্ছে (Row {row_num}): {title}")
             download_from_drive(drive_file_id, "yt_upload.mp4")
