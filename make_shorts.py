@@ -1,5 +1,6 @@
 import os
 import json
+import base64
 import asyncio
 import requests
 import gspread
@@ -9,12 +10,11 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips
 
-# 1. URL যাতে না কাটে সেজন্য ভেঙে Scope তৈরি করা হলো
+# 1. ব্রাউজার ফিল্টার বাইপাস করতে Base64 থেকে Scope ডিকোড করা হলো
 creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-base_auth = "https://" + "://googleapis.com" + "/auth/"
 scopes = [
-    base_auth + "spreadsheets",
-    base_auth + "drive"
+    base64.b64decode("aHR0cHM6Ly93d3cuZ29vZ2xlYXBpcy5jb20vYXV0aC9zcHJlYWRzaGVldHM=").decode("utf-8"),
+    base64.b64decode("aHR0cHM6Ly93d3cuZ29vZ2xlYXBpcy5jb20vYXV0aC9kcml2ZQ==").decode("utf-8")
 ]
 creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
 client = gspread.authorize(creds)
@@ -32,7 +32,7 @@ def download_stock_videos(keywords, count=4):
     video_files = []
     first_keyword = keywords.split(",").strip()
     query = requests.utils.quote(first_keyword)
-    base_pixabay = "https://" + "pixabay.com" + "/api/videos/"
+    base_pixabay = base64.b64decode("aHR0cHM6Ly9waXhhYmF5LmNvbS9hcGkvdmlkZW9zLw==").decode("utf-8")
     url = f"{base_pixabay}?key={api_key}&q={query}&per_page=10"
     
     res = requests.get(url).json()
@@ -92,7 +92,8 @@ def upload_to_drive(file_path, file_name):
 def send_to_telegram(video_path, title, row_index):
     bot_token = os.environ["TELEGRAM_BOT_TOKEN"]
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
-    tg_base = "https://" + "api.telegram.org" + f"/bot{bot_token}/sendVideo"
+    tg_host = base64.b64decode("aHR0cHM6Ly9hcGkudGVsZWdyYW0ub3Jn").decode("utf-8")
+    tg_base = f"{tg_host}/bot{bot_token}/sendVideo"
     
     keyboard = {
         "inline_keyboard": [[
