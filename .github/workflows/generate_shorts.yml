@@ -3,20 +3,10 @@ name: Auto Generate Bangla Shorts
 
 on:
   schedule:
-    - cron: '0 3 * * *'   # বাংলাদেশ সময় সকাল ৯:০০টা
-    - cron: '0 14 * * *'  # বাংলাদেশ সময় রাত ৮:০০টা
+    - cron: '0 3 * * *'
+    - cron: '0 14 * * *'
 
   workflow_dispatch:
-    inputs:
-      row_number:
-        description: 'Google Sheet Row Number'
-        required: false
-        type: string
-
-      topic:
-        description: 'Shorts Topic'
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -51,7 +41,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Video Generator
+      - name: Generate Shorts from Google Sheet
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
@@ -59,10 +49,5 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
-
-          ROW_NUMBER: ${{ inputs.row_number }}
-          TOPIC: ${{ inputs.topic }}
-
           PYTHONUNBUFFERED: "1"
-
         run: python make_shorts.py
