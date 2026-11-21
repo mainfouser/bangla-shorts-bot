@@ -2,6 +2,7 @@ import os
 import json
 import base64
 import asyncio
+import subprocess
 import requests
 import gspread
 import edge_tts
@@ -12,8 +13,8 @@ import moviepy.audio.fx.all as afx
 
 # ================= ব্র্যান্ডিং ও অডিও কনফিগারেশন =================
 BRAND_NAME = "Home BD Info  |  homebdinfo.com"
-VOICE_NAME = "bn-BD-PradeepNeural"          # বিকল্প আরও ন্যাচারাল কণ্ঠ: "bn-IN-BashkarNeural"
-BGM_VOLUME = 0.12                           # ব্যাকগ্রাউন্ড মিউজিকের ভলিউম (১২%, যাতে ভয়েস স্পষ্ট থাকে)
+VOICE_NAME = "bn-IN-BashkarNeural"          # সবচেয়ে ন্যাচারাল ও স্মুথ পুরুষ কণ্ঠ
+BGM_VOLUME = 0.10                           # ব্যাকগ্রাউন্ড মিউজিক ভলিউম (১০%)
 # ================================================================
 
 # 1. Google Sheet কানেকশন
@@ -26,13 +27,24 @@ creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
 client = gspread.authorize(creds)
 sheet = client.open_by_key(os.environ["SHEET_ID"]).worksheet("Shorts_Queue")
 
-# 2. ন্যাচারাল পুরুষ কণ্ঠে বাংলা ভয়েসওভার তৈরি
+# 2. স্টুডিও-গ্রেড ন্যাচারাল বাংলা ভয়েসওভার তৈরি
 async def generate_bangla_voice(text, output_file):
-    # বাংলা বাক্যের মাঝে স্বাভাবিক বিরতি তৈরি করা
-    natural_text = text.replace("।", "। ").replace(",", ", ")
-    # গতি সামান্য কমিয়ে (-4%) এবং পিচ গভীর (-2Hz) করলে রোবোটিক ভাব দূর হয়
-    communicate = edge_tts.Communicate(natural_text, VOICE_NAME, rate="-4%", pitch="-2Hz")
-    await communicate.save(output_file)
+    # বাক্যের মাঝে স্বাভাবিক বিরতি (Pause) তৈরি করা যাতে একটানা রোবটের মতো না শোনায়
+    natural_text = text.replace("।", "... ").replace("?", "?.. ").replace("!", "!.. ")
+    
+    raw_voice = "raw_voice.mp3"
+    # স্বাভাবিক গতি (rate="-2%") এবং সামান্য গভীর পিচ (pitch="-3Hz")
+    communicate = edge_tts.Communicate(natural_text, VOICE_NAME, rate="-2%", pitch="-3Hz")
+    await communicate.save(raw_voice)
+    
+    # FFmpeg স্টুডিও ফিল্টার: যান্ত্রিক শব্দ কমিয়ে ভয়েসকে উষ্ণ, গভীর ও স্পষ্ট করা
+    ffmpeg_cmd = [
+        "ffmpeg", "-y", "-i", raw_voice,
+        "-af", "highpass=f=85,equalizer=f=250:width_type=h:width=150:g=3,equalizer=f=3500:width_type=h:width=1000:g=2,acompressor=threshold=-18dB:ratio=3:attack=5:release=50",
+        "-ar", "44100", "-b:a", "192k",
+        output_file
+    ]
+    subprocess.run(ffmpeg_cmd, check=True)
 
 # 3. Pixabay থেকে হাই-কোয়ালিটি স্টক ভিডিও ডাউনলোড
 def download_stock_videos(keywords, count=4):
@@ -137,11 +149,10 @@ def create_short_video(audio_path, video_paths, output_path):
     overlay_path = create_brand_overlay(W, H)
     brand_clip = ImageClip(overlay_path).set_duration(target_duration)
     
-    # যদি রিপোজিটরিতে bgm.mp3 থাকে, তবে ভয়েসের সাথে সফট মিউজিক মিক্স করবে
     if os.path.exists("bgm.mp3"):
         bgm = AudioFileClip("bgm.mp3")
         bgm = afx.audio_loop(bgm, duration=target_duration).volumex(BGM_VOLUME)
-        bgm = bgm.audio_fadeout(1.5) # ভিডিওর শেষে মিউজিক স্মুথলি কমে যাবে
+        bgm = bgm.audio_fadeout(1.5)
         final_audio = CompositeAudioClip([voice_audio, bgm])
     else:
         final_audio = voice_audio
