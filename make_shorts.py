@@ -9,11 +9,12 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips
 
-# 1. আধুনিক ও নির্ভুল Google Sheet ও Drive কানেকশন
+# 1. URL যাতে না কাটে সেজন্য ভেঙে Scope তৈরি করা হলো
 creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+base_auth = "https://" + "://googleapis.com" + "/auth/"
 scopes = [
-    "https://googleapis.com",
-    "https://googleapis.com"
+    base_auth + "spreadsheets",
+    base_auth + "drive"
 ]
 creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
 client = gspread.authorize(creds)
@@ -31,12 +32,13 @@ def download_stock_videos(keywords, count=4):
     video_files = []
     first_keyword = keywords.split(",").strip()
     query = requests.utils.quote(first_keyword)
-    url = f"https://pixabay.com{api_key}&q={query}&per_page=10"
+    base_pixabay = "https://" + "pixabay.com" + "/api/videos/"
+    url = f"{base_pixabay}?key={api_key}&q={query}&per_page=10"
     
     res = requests.get(url).json()
     hits = res.get("hits", [])
     if not hits:
-        res = requests.get(f"https://pixabay.com{api_key}&q=abstract+technology&per_page=10").json()
+        res = requests.get(f"{base_pixabay}?key={api_key}&q=abstract+technology&per_page=10").json()
         hits = res.get("hits", [])
 
     selected_hits = [h for h in hits if h["videos"]["medium"]["height"] > h["videos"]["medium"]["width"]]
@@ -90,7 +92,7 @@ def upload_to_drive(file_path, file_name):
 def send_to_telegram(video_path, title, row_index):
     bot_token = os.environ["TELEGRAM_BOT_TOKEN"]
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
-    url = f"https://telegram.org{bot_token}/sendVideo"
+    tg_base = "https://" + "api.telegram.org" + f"/bot{bot_token}/sendVideo"
     
     keyboard = {
         "inline_keyboard": [[
@@ -105,7 +107,7 @@ def send_to_telegram(video_path, title, row_index):
             "caption": f"🎬 নতুন শর্টস প্রস্তুত!\n\n📌 টাইটেল: {title}\n\nঅনুমোদন দিতে নিচের বাটনে ক্লিক করুন:",
             "reply_markup": json.dumps(keyboard)
         }
-        return requests.post(url, data=payload, files={"video": vid}).json()
+        return requests.post(tg_base, data=payload, files={"video": vid}).json()
 
 def main():
     rows = sheet.get_all_values()
