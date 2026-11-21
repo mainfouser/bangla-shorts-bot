@@ -6,11 +6,9 @@ import requests
 import gspread
 import edge_tts
 from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
 from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips
 
-# 1. Google Sheet ও Drive কানেকশন
+# 1. Google Sheet কানেকশন
 creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
 scopes = [
     base64.b64decode("aHR0cHM6Ly93d3cuZ29vZ2xlYXBpcy5jb20vYXV0aC9zcHJlYWRzaGVldHM=").decode("utf-8"),
@@ -19,7 +17,6 @@ scopes = [
 creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
 client = gspread.authorize(creds)
 sheet = client.open_by_key(os.environ["SHEET_ID"]).worksheet("Shorts_Queue")
-drive_service = build("drive", "v3", credentials=creds)
 
 # 2. বাংলা ভয়েসওভার তৈরি
 async def generate_bangla_voice(text, output_file):
@@ -30,7 +27,6 @@ async def generate_bangla_voice(text, output_file):
 def download_stock_videos(keywords, count=4):
     api_key = os.environ["PIXABAY_API_KEY"]
     video_files = []
-    # .pop(0) ব্যবহার করা হয়েছে যাতে ব্র্যাকেটের কোনো প্রয়োজন না হয়
     first_keyword = keywords.split(",").pop(0).strip() if keywords else "technology"
     query = requests.utils.quote(first_keyword)
     base_pixabay = base64.b64decode("aHR0cHM6Ly9waXhhYmF5LmNvbS9hcGkvdmlkZW9zLw==").decode("utf-8")
@@ -79,17 +75,7 @@ def create_short_video(audio_path, video_paths, output_path):
     final_video = final_video.set_audio(audio)
     final_video.write_videofile(output_path, fps=24, codec="libx264", audio_codec="aac")
 
-# 5. Google Drive-এ ভিডিও আপলোড করে File ID নেওয়া
-def upload_to_drive(file_path, file_name):
-    file_metadata = {
-        "name": file_name,
-        "parents": [os.environ["DRIVE_FOLDER_ID"]]
-    }
-    media = MediaFileUpload(file_path, mimetype="video/mp4", resumable=True)
-    uploaded_file = drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
-    return uploaded_file.get("id")
-
-# 6. টেলিগ্রামে ভিডিও ও বাটন পাঠানো
+# 5. টেলিগ্রামে ভিডিও ও বাটন পাঠানো
 def send_to_telegram(video_path, title, row_index):
     bot_token = os.environ["TELEGRAM_BOT_TOKEN"]
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
@@ -113,12 +99,9 @@ def send_to_telegram(video_path, title, row_index):
 
 def main():
     records = sheet.get_all_records()
-    print(f"মোট পোস্ট পাওয়া গেছে: {len(records)}")
-    
     for idx, item in enumerate(records):
         row_num = idx + 2
         status = str(item.get("Status", "")).strip()
-        print(f"Row {row_num} Status: {status}")
         
         if status == "SCRIPT_READY":
             title = str(item.get("Shorts Title (YT)", ""))
@@ -130,17 +113,15 @@ def main():
             clips = download_stock_videos(keywords)
             create_short_video("voice.mp3", clips, "final_short.mp4")
             
-            # Drive-এ সেভ করা
-            drive_file_id = upload_to_drive("final_short.mp4", f"short_row_{row_num}.mp4")
-            
-            # টেলিগ্রামে পাঠানো
+            # সরাসরি টেলিগ্রামে পাঠানো ও টেলিগ্রামের file_id সেভ করা
             tg_res = send_to_telegram("final_short.mp4", title, row_num)
             if tg_res.get("ok"):
                 msg_id = str(tg_res["result"]["message_id"])
+                tg_file_id = str(tg_res["result"]["video"]["file_id"])
                 sheet.update_cell(row_num, 8, "PENDING_APPROVAL")
-                sheet.update_cell(row_num, 9, drive_file_id)
+                sheet.update_cell(row_num, 9, tg_file_id)
                 sheet.update_cell(row_num, 10, msg_id)
-                print("সফলভাবে Drive-এ সেভ ও টেলিগ্রামে পাঠানো হয়েছে!")
+                print("সফলভাবে টেলিগ্রামে পাঠানো হয়েছে!")
             break
 
 if __name__ == "__main__":
