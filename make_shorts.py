@@ -7,12 +7,14 @@ import gspread
 import edge_tts
 from PIL import Image, ImageDraw, ImageFont
 from google.oauth2.service_account import Credentials
-from moviepy.editor import VideoFileClip, AudioFileClip, ImageClip, CompositeVideoClip, concatenate_videoclips
+from moviepy.editor import VideoFileClip, AudioFileClip, ImageClip, CompositeVideoClip, CompositeAudioClip, concatenate_videoclips
+import moviepy.audio.fx.all as afx
 
-# ================= ব্র্যান্ডিং কনফিগারেশন =================
+# ================= ব্র্যান্ডিং ও অডিও কনফিগারেশন =================
 BRAND_NAME = "Home BD Info  |  homebdinfo.com"
-VOICE_NAME = "bn-BD-PradeepNeural"          # ন্যাচারাল পুরুষ কণ্ঠ (প্রদীপ)
-# ==========================================================
+VOICE_NAME = "bn-BD-PradeepNeural"          # বিকল্প আরও ন্যাচারাল কণ্ঠ: "bn-IN-BashkarNeural"
+BGM_VOLUME = 0.12                           # ব্যাকগ্রাউন্ড মিউজিকের ভলিউম (১২%, যাতে ভয়েস স্পষ্ট থাকে)
+# ================================================================
 
 # 1. Google Sheet কানেকশন
 creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
@@ -26,7 +28,10 @@ sheet = client.open_by_key(os.environ["SHEET_ID"]).worksheet("Shorts_Queue")
 
 # 2. ন্যাচারাল পুরুষ কণ্ঠে বাংলা ভয়েসওভার তৈরি
 async def generate_bangla_voice(text, output_file):
-    communicate = edge_tts.Communicate(text, VOICE_NAME, rate="+5%", pitch="+0Hz")
+    # বাংলা বাক্যের মাঝে স্বাভাবিক বিরতি তৈরি করা
+    natural_text = text.replace("।", "। ").replace(",", ", ")
+    # গতি সামান্য কমিয়ে (-4%) এবং পিচ গভীর (-2Hz) করলে রোবোটিক ভাব দূর হয়
+    communicate = edge_tts.Communicate(natural_text, VOICE_NAME, rate="-4%", pitch="-2Hz")
     await communicate.save(output_file)
 
 # 3. Pixabay থেকে হাই-কোয়ালিটি স্টক ভিডিও ডাউনলোড
@@ -57,12 +62,11 @@ def download_stock_videos(keywords, count=4):
         video_files.append(filename)
     return video_files
 
-# 4. লোগোটিকে সুন্দর গোল ব্যাজে রূপান্তর ও নিচের ব্র্যান্ড বার তৈরি (ব্র্যাকেট-মুক্ত নিরাপদ কোড)
+# 4. লোগো ব্যাজ ও নিচের ব্র্যান্ড বার তৈরি
 def create_brand_overlay(width=1080, height=1920, output_png="brand_overlay.png"):
     canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(canvas)
     
-    # ক) উপরে ডানদিকে লোগো ব্যাজ বসানো (যদি logo.png থাকে)
     if os.path.exists("logo.png"):
         badge_size = 150
         badge = Image.new("RGBA", (badge_size, badge_size), (0, 0, 0, 0))
@@ -77,7 +81,6 @@ def create_brand_overlay(width=1080, height=1920, output_png="brand_overlay.png"
         
         canvas.paste(badge, (width - badge_size - 55, 95), badge)
 
-    # খ) নিচের দিকে প্রফেশনাল ব্র্যান্ড পিল/বার
     bar_w, bar_h = 720, 74
     x1 = (width - bar_w) // 2
     y1 = height - 290
@@ -95,7 +98,6 @@ def create_brand_overlay(width=1080, height=1920, output_png="brand_overlay.png"
     except Exception:
         font = ImageFont.load_default()
         
-    # anchor="mm" দিলে কোনো ব্র্যাকেট ছাড়াই লেখাটি বক্সের ঠিক মাঝখানে বসবে
     center_x = width // 2
     center_y = y1 + (bar_h // 2)
     draw.text((center_x, center_y), BRAND_NAME, font=font, fill=(255, 255, 255, 250), anchor="mm")
@@ -103,10 +105,10 @@ def create_brand_overlay(width=1080, height=1920, output_png="brand_overlay.png"
     canvas.save(output_png)
     return output_png
 
-# 5. Full HD (1080x1920) ব্র্যান্ডেড শর্টস রেন্ডার করা
+# 5. Full HD ভিডিও রেন্ডার + ব্যাকগ্রাউন্ড মিউজিক মিক্সিং
 def create_short_video(audio_path, video_paths, output_path):
-    audio = AudioFileClip(audio_path)
-    target_duration = audio.duration
+    voice_audio = AudioFileClip(audio_path)
+    target_duration = voice_audio.duration
     clips = []
     current_duration = 0
     idx = 0
@@ -132,11 +134,19 @@ def create_short_video(audio_path, video_paths, output_path):
         idx += 1
 
     base_video = concatenate_videoclips(clips, method="compose").subclip(0, target_duration)
-    
     overlay_path = create_brand_overlay(W, H)
     brand_clip = ImageClip(overlay_path).set_duration(target_duration)
     
-    final_video = CompositeVideoClip([base_video, brand_clip]).set_audio(audio)
+    # যদি রিপোজিটরিতে bgm.mp3 থাকে, তবে ভয়েসের সাথে সফট মিউজিক মিক্স করবে
+    if os.path.exists("bgm.mp3"):
+        bgm = AudioFileClip("bgm.mp3")
+        bgm = afx.audio_loop(bgm, duration=target_duration).volumex(BGM_VOLUME)
+        bgm = bgm.audio_fadeout(1.5) # ভিডিওর শেষে মিউজিক স্মুথলি কমে যাবে
+        final_audio = CompositeAudioClip([voice_audio, bgm])
+    else:
+        final_audio = voice_audio
+
+    final_video = CompositeVideoClip([base_video, brand_clip]).set_audio(final_audio)
     final_video.write_videofile(output_path, fps=30, codec="libx264", audio_codec="aac", bitrate="4000k")
 
 # 6. টেলিগ্রামে ভিডিও ও বাটন পাঠানো
