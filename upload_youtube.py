@@ -8,11 +8,12 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 
-# 1. আধুনিক ও নির্ভুল Google Sheet ও Drive কানেকশন
+# 1. URL যাতে না কাটে সেজন্য ভেঙে Scope তৈরি করা হলো
 creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+base_auth = "https://" + "://googleapis.com" + "/auth/"
 scopes = [
-    "https://googleapis.com",
-    "https://googleapis.com"
+    base_auth + "spreadsheets",
+    base_auth + "drive"
 ]
 creds = ServiceAccountCredentials.from_service_account_info(creds_dict, scopes=scopes)
 client = gspread.authorize(creds)
@@ -20,10 +21,11 @@ sheet = client.open_by_key(os.environ["SHEET_ID"]).worksheet("Shorts_Queue")
 drive_service = build("drive", "v3", credentials=creds)
 
 # 2. YouTube API কানেকশন
+token_url = "https://" + "://googleapis.com" + "/token"
 yt_creds = Credentials(
     token=None,
     refresh_token=os.environ["YT_REFRESH_TOKEN"],
-    token_uri="https://googleapis.com",
+    token_uri=token_url,
     client_id=os.environ["YT_CLIENT_ID"],
     client_secret=os.environ["YT_CLIENT_SECRET"]
 )
@@ -55,8 +57,9 @@ def upload_to_youtube(video_path, title, description):
     return response.get("id")
 
 def notify_telegram(text):
-    url = f"https://telegram.org{os.environ['TELEGRAM_BOT_TOKEN']}/sendMessage"
-    requests.post(url, json={"chat_id": os.environ["TELEGRAM_CHAT_ID"], "text": text})
+    bot_token = os.environ["TELEGRAM_BOT_TOKEN"]
+    tg_url = "https://" + "api.telegram.org" + f"/bot{bot_token}/sendMessage"
+    requests.post(tg_url, json={"chat_id": os.environ["TELEGRAM_CHAT_ID"], "text": text})
 
 def main():
     rows = sheet.get_all_values()
@@ -78,7 +81,7 @@ def main():
             yt_id = upload_to_youtube("yt_upload.mp4", title, f"বিস্তারিত পড়ুন: {post_url}")
             
             if yt_id:
-                yt_link = f"https://youtube.com{yt_id}"
+                yt_link = "https://" + "://youtube.com" + yt_id
                 sheet.update_cell(row_num, 8, "PUBLISHED")
                 sheet.update_cell(row_num, 9, yt_link)
                 drive_service.files().delete(fileId=drive_file_id).execute()
