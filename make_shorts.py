@@ -10,7 +10,7 @@ from google.oauth2.service_account import Credentials
 from moviepy.editor import VideoFileClip, AudioFileClip, ImageClip, CompositeVideoClip, concatenate_videoclips
 
 # ================= ব্র্যান্ডিং কনফিগারেশন =================
-BRAND_NAME = "Home BD Info | homebdinfo.com"  # ভিডিওর নিচে আপনার ব্র্যান্ডের নাম দেখাবে
+BRAND_NAME = "Home BD Info  |  homebdinfo.com"
 VOICE_NAME = "bn-BD-PradeepNeural"          # ন্যাচারাল পুরুষ কণ্ঠ (প্রদীপ)
 # ==========================================================
 
@@ -26,7 +26,6 @@ sheet = client.open_by_key(os.environ["SHEET_ID"]).worksheet("Shorts_Queue")
 
 # 2. ন্যাচারাল পুরুষ কণ্ঠে বাংলা ভয়েসওভার তৈরি
 async def generate_bangla_voice(text, output_file):
-    # rate="+5%" দিলে কণ্ঠ আরও স্বাভাবিক ও প্রাণবন্ত শোনায়
     communicate = edge_tts.Communicate(text, VOICE_NAME, rate="+5%", pitch="+0Hz")
     await communicate.save(output_file)
 
@@ -45,13 +44,11 @@ def download_stock_videos(keywords, count=4):
         res = requests.get(f"{base_pixabay}?key={api_key}&q=abstract+modern&per_page=15").json()
         hits = res.get("hits", [])
 
-    # পোর্ট্রেট ভিডিও আগে নেওয়া, যাতে জুম হয়ে ফেটে না যায়
     selected_hits = [h for h in hits if h["videos"]["medium"]["height"] >= h["videos"]["medium"]["width"]]
     if len(selected_hits) < count:
         selected_hits.extend([h for h in hits if h not in selected_hits])
 
     for idx, vid in enumerate(selected_hits[:count]):
-        # বড় ও পরিষ্কার রেজোলিউশন নেওয়া
         vid_data = vid["videos"].get("large") or vid["videos"].get("medium")
         vid_url = vid_data["url"]
         filename = f"clip_{idx}.mp4"
@@ -60,29 +57,54 @@ def download_stock_videos(keywords, count=4):
         video_files.append(filename)
     return video_files
 
-# 4. ব্র্যান্ডিং ওয়াটারমার্ক ব্যানার তৈরি (Pillow দিয়ে স্বচ্ছ ব্যানার)
+# 4. লোগোটিকে সুন্দর গোল ব্যাজে রূপান্তর ও নিচের ব্র্যান্ড বার তৈরি
 def create_brand_overlay(width=1080, height=1920, output_png="brand_overlay.png"):
-    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
+    canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
     
-    # নিচের দিকে সেমি-ট্রান্সপারেন্ট কালো ব্র্যান্ড পিল/বার আঁকা
-    bar_w, bar_h = 680, 76
+    # ক) উপরে ডানদিকে লোগো ব্যাজ বসানো (যদি logo.png থাকে)
+    if os.path.exists("logo.png"):
+        badge_size = 150
+        # সাদা গোল ব্যাকগ্রাউন্ড ও সবুজ বর্ডার তৈরি
+        badge = Image.new("RGBA", (badge_size, badge_size), (0, 0, 0, 0))
+        b_draw = ImageDraw.Draw(badge)
+        b_draw.ellipse([0, 0, badge_size-1, badge_size-1], fill=(255, 255, 255, 245), outline=(22, 163, 74, 255), width=6)
+        
+        # আসল লোগো রিসাইজ করে গোল ব্যাজের মাঝখানে বসানো
+        logo_img = Image.open("logo.png").convert("RGBA")
+        inner_size = 105
+        logo_img = logo_img.resize((inner_size, inner_size), Image.LANCZOS)
+        offset = (badge_size - inner_size) // 2
+        badge.paste(logo_img, (offset, offset), logo_img)
+        
+        # ভিডিওর উপরে ডানদিকে নিরাপদ দূরত্বে বসানো
+        canvas.paste(badge, (width - badge_size - 55, 95), badge)
+
+    # খ) নিচের দিকে প্রফেশনাল ব্র্যান্ড পিল/বার (YouTube UI-এর ঠিক উপরে)
+    bar_w, bar_h = 720, 74
     x1 = (width - bar_w) // 2
-    y1 = height - 220
-    draw.rounded_rectangle([x1, y1, x1 + bar_w, y1 + bar_h], radius=38, fill=(15, 23, 42, 195), outline=(59, 130, 246, 230), width=3)
+    y1 = height - 290  # YouTube Shorts টাইটেল ও বাটনের উপরে নিরাপদ পজিশন
     
-    # ব্র্যান্ডের নাম লেখা
+    # গাঢ় ব্যাকগ্রাউন্ড ও সবুজ-লাল থিম বর্ডার
+    draw.rounded_rectangle(
+        [x1, y1, x1 + bar_w, y1 + bar_h], 
+        radius=37, 
+        fill=(15, 23, 42, 205), 
+        outline=(22, 163, 74, 240), 
+        width=4
+    )
+    
     try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 31)
     except:
         font = ImageFont.load_default()
         
     bbox = draw.textbbox((0, 0), BRAND_NAME, font=font)
-    text_w = bbox[2] - bbox[0]
-    text_h = bbox[3] - bbox[1]
-    draw.text(((width - text_w) // 2, y1 + (bar_h - text_h) // 2 - 4), BRAND_NAME, font=font, fill=(255, 255, 255, 245))
+    text_w = bbox - bbox
+    text_h = bbox - bbox
+    draw.text(((width - text_w) // 2, y1 + (bar_h - text_h) // 2 - 4), BRAND_NAME, font=font, fill=(255, 255, 255, 250))
     
-    img.save(output_png)
+    canvas.save(output_png)
     return output_png
 
 # 5. Full HD (1080x1920) ব্র্যান্ডেড শর্টস রেন্ডার করা
@@ -93,13 +115,12 @@ def create_short_video(audio_path, video_paths, output_path):
     current_duration = 0
     idx = 0
     
-    W, H = 1080, 1920  # Full HD 9:16 রেজোলিউশন
+    W, H = 1080, 1920
     
     while current_duration < target_duration:
         clip_path = video_paths[idx % len(video_paths)]
         clip = VideoFileClip(clip_path).without_audio()
         
-        # অনুপাত ঠিক রেখে ক্রপ করা যাতে ভিডিও চ্যাপ্টা বা ব্লার না হয়
         clip_ratio = clip.w / clip.h
         target_ratio = W / H
         
@@ -116,17 +137,11 @@ def create_short_video(audio_path, video_paths, output_path):
 
     base_video = concatenate_videoclips(clips, method="compose").subclip(0, target_duration)
     
-    # ব্র্যান্ড ওভারলে যুক্ত করা
+    # ব্র্যান্ড ওভারলে (গোল লোগো ব্যাজ + নিচের ওয়েবসাইট বার) যুক্ত করা
     overlay_path = create_brand_overlay(W, H)
     brand_clip = ImageClip(overlay_path).set_duration(target_duration)
-    layers = [base_video, brand_clip]
     
-    # যদি রিপোজিটরিতে logo.png আপলোড করা থাকে, তবে উপরে ডানদিকে লোগো বসাবে
-    if os.path.exists("logo.png"):
-        logo = ImageClip("logo.png").resize(width=160).set_duration(target_duration).set_position((W - 210, 80))
-        layers.append(logo)
-        
-    final_video = CompositeVideoClip(layers).set_audio(audio)
+    final_video = CompositeVideoClip([base_video, brand_clip]).set_audio(audio)
     final_video.write_videofile(output_path, fps=30, codec="libx264", audio_codec="aac", bitrate="4000k")
 
 # 6. টেলিগ্রামে ভিডিও ও বাটন পাঠানো
