@@ -1,6 +1,7 @@
 import os
 import io
 import json
+import base64
 import requests
 import gspread
 from google.oauth2.service_account import Credentials as ServiceAccountCredentials
@@ -8,12 +9,11 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 
-# 1. URL যাতে না কাটে সেজন্য ভেঙে Scope তৈরি করা হলো
+# 1. ব্রাউজার ফিল্টার বাইপাস করতে Base64 থেকে Scope ডিকোড করা হলো
 creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-base_auth = "https://" + "://googleapis.com" + "/auth/"
 scopes = [
-    base_auth + "spreadsheets",
-    base_auth + "drive"
+    base64.b64decode("aHR0cHM6Ly93d3cuZ29vZ2xlYXBpcy5jb20vYXV0aC9zcHJlYWRzaGVldHM=").decode("utf-8"),
+    base64.b64decode("aHR0cHM6Ly93d3cuZ29vZ2xlYXBpcy5jb20vYXV0aC9kcml2ZQ==").decode("utf-8")
 ]
 creds = ServiceAccountCredentials.from_service_account_info(creds_dict, scopes=scopes)
 client = gspread.authorize(creds)
@@ -21,7 +21,7 @@ sheet = client.open_by_key(os.environ["SHEET_ID"]).worksheet("Shorts_Queue")
 drive_service = build("drive", "v3", credentials=creds)
 
 # 2. YouTube API কানেকশন
-token_url = "https://" + "://googleapis.com" + "/token"
+token_url = base64.b64decode("aHR0cHM6Ly9vYXV0aDIuZ29vZ2xlYXBpcy5jb20vdG9rZW4=").decode("utf-8")
 yt_creds = Credentials(
     token=None,
     refresh_token=os.environ["YT_REFRESH_TOKEN"],
@@ -58,7 +58,8 @@ def upload_to_youtube(video_path, title, description):
 
 def notify_telegram(text):
     bot_token = os.environ["TELEGRAM_BOT_TOKEN"]
-    tg_url = "https://" + "api.telegram.org" + f"/bot{bot_token}/sendMessage"
+    tg_host = base64.b64decode("aHR0cHM6Ly9hcGkudGVsZWdyYW0ub3Jn").decode("utf-8")
+    tg_url = f"{tg_host}/bot{bot_token}/sendMessage"
     requests.post(tg_url, json={"chat_id": os.environ["TELEGRAM_CHAT_ID"], "text": text})
 
 def main():
@@ -81,7 +82,8 @@ def main():
             yt_id = upload_to_youtube("yt_upload.mp4", title, f"বিস্তারিত পড়ুন: {post_url}")
             
             if yt_id:
-                yt_link = "https://" + "://youtube.com" + yt_id
+                yt_host = base64.b64decode("aHR0cHM6Ly95b3V0dWJlLmNvbS9zaG9ydHMv").decode("utf-8")
+                yt_link = yt_host + yt_id
                 sheet.update_cell(row_num, 8, "PUBLISHED")
                 sheet.update_cell(row_num, 9, yt_link)
                 drive_service.files().delete(fileId=drive_file_id).execute()
