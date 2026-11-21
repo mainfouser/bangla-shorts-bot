@@ -57,7 +57,7 @@ def download_stock_videos(keywords, count=4):
         video_files.append(filename)
     return video_files
 
-# 4. লোগোটিকে সুন্দর গোল ব্যাজে রূপান্তর ও নিচের ব্র্যান্ড বার তৈরি
+# 4. লোগোটিকে সুন্দর গোল ব্যাজে রূপান্তর ও নিচের ব্র্যান্ড বার তৈরি (ব্র্যাকেট-মুক্ত নিরাপদ কোড)
 def create_brand_overlay(width=1080, height=1920, output_png="brand_overlay.png"):
     canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(canvas)
@@ -65,29 +65,25 @@ def create_brand_overlay(width=1080, height=1920, output_png="brand_overlay.png"
     # ক) উপরে ডানদিকে লোগো ব্যাজ বসানো (যদি logo.png থাকে)
     if os.path.exists("logo.png"):
         badge_size = 150
-        # সাদা গোল ব্যাকগ্রাউন্ড ও সবুজ বর্ডার তৈরি
         badge = Image.new("RGBA", (badge_size, badge_size), (0, 0, 0, 0))
         b_draw = ImageDraw.Draw(badge)
-        b_draw.ellipse([0, 0, badge_size-1, badge_size-1], fill=(255, 255, 255, 245), outline=(22, 163, 74, 255), width=6)
+        b_draw.ellipse((0, 0, badge_size-1, badge_size-1), fill=(255, 255, 255, 245), outline=(22, 163, 74, 255), width=6)
         
-        # আসল লোগো রিসাইজ করে গোল ব্যাজের মাঝখানে বসানো
         logo_img = Image.open("logo.png").convert("RGBA")
         inner_size = 105
         logo_img = logo_img.resize((inner_size, inner_size), Image.LANCZOS)
         offset = (badge_size - inner_size) // 2
         badge.paste(logo_img, (offset, offset), logo_img)
         
-        # ভিডিওর উপরে ডানদিকে নিরাপদ দূরত্বে বসানো
         canvas.paste(badge, (width - badge_size - 55, 95), badge)
 
-    # খ) নিচের দিকে প্রফেশনাল ব্র্যান্ড পিল/বার (YouTube UI-এর ঠিক উপরে)
+    # খ) নিচের দিকে প্রফেশনাল ব্র্যান্ড পিল/বার
     bar_w, bar_h = 720, 74
     x1 = (width - bar_w) // 2
-    y1 = height - 290  # YouTube Shorts টাইটেল ও বাটনের উপরে নিরাপদ পজিশন
+    y1 = height - 290
     
-    # গাঢ় ব্যাকগ্রাউন্ড ও সবুজ-লাল থিম বর্ডার
     draw.rounded_rectangle(
-        [x1, y1, x1 + bar_w, y1 + bar_h], 
+        (x1, y1, x1 + bar_w, y1 + bar_h), 
         radius=37, 
         fill=(15, 23, 42, 205), 
         outline=(22, 163, 74, 240), 
@@ -96,13 +92,13 @@ def create_brand_overlay(width=1080, height=1920, output_png="brand_overlay.png"
     
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 31)
-    except:
+    except Exception:
         font = ImageFont.load_default()
         
-    bbox = draw.textbbox((0, 0), BRAND_NAME, font=font)
-    text_w = bbox - bbox
-    text_h = bbox - bbox
-    draw.text(((width - text_w) // 2, y1 + (bar_h - text_h) // 2 - 4), BRAND_NAME, font=font, fill=(255, 255, 255, 250))
+    # anchor="mm" দিলে কোনো ব্র্যাকেট ছাড়াই লেখাটি বক্সের ঠিক মাঝখানে বসবে
+    center_x = width // 2
+    center_y = y1 + (bar_h // 2)
+    draw.text((center_x, center_y), BRAND_NAME, font=font, fill=(255, 255, 255, 250), anchor="mm")
     
     canvas.save(output_png)
     return output_png
@@ -137,7 +133,6 @@ def create_short_video(audio_path, video_paths, output_path):
 
     base_video = concatenate_videoclips(clips, method="compose").subclip(0, target_duration)
     
-    # ব্র্যান্ড ওভারলে (গোল লোগো ব্যাজ + নিচের ওয়েবসাইট বার) যুক্ত করা
     overlay_path = create_brand_overlay(W, H)
     brand_clip = ImageClip(overlay_path).set_duration(target_duration)
     
