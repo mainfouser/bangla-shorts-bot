@@ -1,0 +1,6 @@
+gspread
+oauth2client
+edge-tts
+requests
+moviepy==1.0.3
+Pillow==9.5.0
