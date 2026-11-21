@@ -14,6 +14,8 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 
+from gspread.utils import rowcol_to_a1
+
 
 # =========================================================
 # CONFIGURATION
@@ -30,6 +32,29 @@ SCOPES = [
 YOUTUBE_SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload"
 ]
+
+MAX_ERROR_LENGTH = 1000
+
+
+# =========================================================
+# ENVIRONMENT VARIABLES
+# =========================================================
+
+REQUIRED_ENV = [
+    "GOOGLE_CREDENTIALS",
+    "SHEET_ID",
+    "YT_CLIENT_ID",
+    "YT_CLIENT_SECRET",
+    "YT_REFRESH_TOKEN",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID"
+]
+
+for env_name in REQUIRED_ENV:
+    if not os.environ.get(env_name):
+        raise EnvironmentError(
+            f"GitHub Secret পাওয়া যায়নি: {env_name}"
+        )
 
 
 # =========================================================
@@ -59,7 +84,7 @@ sheet = client.open_by_key(
 headers = sheet.row_values(1)
 
 COL = {
-    name: index + 1
+    name.strip(): index + 1
     for index, name in enumerate(headers)
 }
 
@@ -88,17 +113,70 @@ if missing_headers:
     )
 
 
+# =========================================================
+# GOOGLE SHEET UPDATE FUNCTIONS
+# =========================================================
+
 def update_field(row_number, field, value):
-    sheet.update_cell(
+
+    if field not in COL:
+        raise ValueError(
+            f"Sheet Header পাওয়া যায়নি: {field}"
+        )
+
+    cell = rowcol_to_a1(
         row_number,
-        COL[field],
-        value
+        COL[field]
+    )
+
+    sheet.update(
+        range_name=cell,
+        values=[[value]],
+        value_input_option="RAW"
     )
 
 
 def update_fields(row_number, data):
+
+    updates = []
+
     for field, value in data.items():
-        update_field(row_number, field, value)
+
+        if field not in COL:
+            raise ValueError(
+                f"Sheet Header পাওয়া যায়নি: {field}"
+            )
+
+        cell = rowcol_to_a1(
+            row_number,
+            COL[field]
+        )
+
+        updates.append({
+            "range": cell,
+            "values": [[value]]
+        })
+
+    # Update all fields in one batch request
+    sheet.batch_update(
+        updates,
+        value_input_option="RAW"
+    )
+
+
+def mark_failed(row_number, error):
+
+    try:
+        update_fields(row_number, {
+            "YouTube Status": "FAILED",
+            "Last Error": str(error)[:MAX_ERROR_LENGTH]
+        })
+
+    except Exception as sheet_error:
+        print(
+            "FAILED Status Update Error:",
+            str(sheet_error)
+        )
 
 
 # =========================================================
@@ -126,13 +204,13 @@ yt_creds = OAuthCredentials(
     scopes=YOUTUBE_SCOPES
 )
 
-# Refresh access token
 yt_creds.refresh(Request())
 
 youtube = build(
     "youtube",
     "v3",
-    credentials=yt_creds
+    credentials=yt_creds,
+    cache_discovery=False
 )
 
 
@@ -169,7 +247,7 @@ def download_from_drive(file_id, output_path):
                     f"Drive Download: {progress}%"
                 )
 
-    if not os.path.exists(output_path):
+    if not os.path.isfile(output_path):
         raise RuntimeError(
             "Google Drive থেকে ভিডিও ডাউনলোড হয়নি।"
         )
@@ -178,6 +256,8 @@ def download_from_drive(file_id, output_path):
         raise RuntimeError(
             "ডাউনলোড করা ভিডিও ফাইল খালি।"
         )
+
+    print("Google Drive Download সম্পন্ন।")
 
     return output_path
 
@@ -191,10 +271,7 @@ def upload_to_youtube(video_path, title, description):
     body = {
         "snippet": {
             "title": title[:100],
-            "description": (
-                description
-                + "\n\n#Shorts #BanglaShorts"
-            ),
+            "description": description[:5000],
             "categoryId": "22"
         },
         "status": {
@@ -304,11 +381,11 @@ def select_approved_row():
             item.get("YouTube Video ID", "")
         ).strip()
 
-        # Already published: Skip
+        # Never upload an already published video
         if youtube_status == "PUBLISHED" or youtube_id:
             continue
 
-        # Avoid duplicate upload after uncertain result
+        # Never automatically retry uncertain uploads
         if youtube_status == "UPLOADING":
             continue
 
@@ -319,7 +396,7 @@ def select_approved_row():
         if approval != "APPROVED":
             continue
 
-        # Only empty or failed status can be processed
+        # Only blank or FAILED status can be processed
         if youtube_status not in ("", "FAILED"):
             continue
 
@@ -349,17 +426,18 @@ def process_video(row_number, item):
         item.get("Drive File ID", "")
     ).strip()
 
+    # Validate before starting upload
     if not title:
-        raise ValueError(
-            "YouTube Title খালি।"
-        )
+        error = "YouTube Title খালি।"
+        mark_failed(row_number, error)
+        raise ValueError(error)
 
     if not drive_file_id:
-        raise ValueError(
-            "Drive File ID পাওয়া যায়নি।"
-        )
+        error = "Drive File ID পাওয়া যায়নি।"
+        mark_failed(row_number, error)
+        raise ValueError(error)
 
-    # Mark uploading before API request
+    # Mark UPLOADING before starting
     update_fields(row_number, {
         "YouTube Status": "UPLOADING",
         "Last Error": ""
@@ -369,11 +447,31 @@ def process_video(row_number, item):
         f"YouTube Upload শুরু: Row {row_number}"
     )
 
-    # Download from Drive
-    download_from_drive(
-        drive_file_id,
-        VIDEO_FILE
-    )
+    # -----------------------------------------------------
+    # STEP 1: Download from Drive
+    # -----------------------------------------------------
+
+    try:
+
+        download_from_drive(
+            drive_file_id,
+            VIDEO_FILE
+        )
+
+    except Exception as error:
+
+        # No YouTube upload has started.
+        # Safe to retry this row later.
+        mark_failed(
+            row_number,
+            "Drive Download Error: " + str(error)
+        )
+
+        raise
+
+    # -----------------------------------------------------
+    # STEP 2: Upload to YouTube
+    # -----------------------------------------------------
 
     description = (
         "বিস্তারিত পড়ুন:\n"
@@ -382,12 +480,49 @@ def process_video(row_number, item):
         "Home BD Info - বাংলাদেশের প্রয়োজনীয় তথ্য ও গাইড।"
     )
 
-    # Upload to YouTube
-    youtube_id = upload_to_youtube(
-        VIDEO_FILE,
-        title,
-        description
-    )
+    try:
+
+        youtube_id = upload_to_youtube(
+            VIDEO_FILE,
+            title,
+            description
+        )
+
+    except Exception as error:
+
+        # IMPORTANT:
+        # Upload may have reached YouTube even if
+        # the client did not receive a final response.
+        # Keep UPLOADING to prevent duplicate uploads.
+
+        try:
+            update_field(
+                row_number,
+                "Last Error",
+                (
+                    "Upload result uncertain. "
+                    "Check YouTube Studio before retrying. "
+                    + str(error)
+                )[:MAX_ERROR_LENGTH]
+            )
+
+        except Exception as sheet_error:
+
+            print(
+                "Error details could not be saved:",
+                str(sheet_error)
+            )
+
+        print(
+            "Upload result uncertain. "
+            "YouTube Studio verification required."
+        )
+
+        raise
+
+    # -----------------------------------------------------
+    # STEP 3: YouTube Upload Confirmed
+    # -----------------------------------------------------
 
     youtube_url = (
         "https://www.youtube.com/shorts/"
@@ -398,24 +533,69 @@ def process_video(row_number, item):
         timezone.utc
     ).isoformat()
 
-    # Update Google Sheet
-    update_fields(row_number, {
-        "YouTube Status": "PUBLISHED",
-        "YouTube Video ID": youtube_id,
-        "YouTube URL": youtube_url,
-        "YouTube Published At": published_at,
-        "Last Error": ""
-    })
+    # Save confirmed YouTube ID and PUBLISHED status
+    # before sending Telegram notification.
+
+    try:
+
+        update_fields(row_number, {
+            "YouTube Status": "PUBLISHED",
+            "YouTube Video ID": youtube_id,
+            "YouTube URL": youtube_url,
+            "YouTube Published At": published_at,
+            "Last Error": ""
+        })
+
+    except Exception as sheet_error:
+
+        # YouTube has already returned a valid video ID.
+        # Do NOT mark FAILED or upload again.
+        print(
+            "CRITICAL: YouTube upload succeeded, "
+            "but Sheet update failed."
+        )
+
+        print("Video ID:", youtube_id)
+
+        raise RuntimeError(
+            "YouTube video exists. "
+            "Sheet update failed. "
+            "Manually save this Video ID before retrying. "
+            + str(sheet_error)
+        )
 
     print(
         "YouTube Upload সফল:",
         youtube_url
     )
 
-    # Telegram notification
-    notify_telegram(
-        "🎉 তোমার Shorts সফলভাবে YouTube-এ Publish হয়েছে!\n\n"
-        + youtube_url
+    # -----------------------------------------------------
+    # STEP 4: Telegram Notification
+    # -----------------------------------------------------
+
+    try:
+
+        notify_telegram(
+            "🎉 তোমার Shorts সফলভাবে YouTube-এ Publish হয়েছে!\n\n"
+            + youtube_url
+        )
+
+        print(
+            "Telegram Notification Sent."
+        )
+
+    except Exception as notification_error:
+
+        # Notification failure must never change
+        # YouTube publishing status.
+
+        print(
+            "Telegram Notification Failed:",
+            str(notification_error)
+        )
+
+    print(
+        f"Row {row_number} Processing সম্পন্ন।"
     )
 
 
@@ -424,6 +604,8 @@ def process_video(row_number, item):
 # =========================================================
 
 def main():
+
+    print("YouTube Publisher Started.")
 
     row_number = None
 
@@ -446,30 +628,12 @@ def main():
 
     except Exception as error:
 
-        error_text = str(error)[:1000]
-
         print(
-            "YOUTUBE UPLOAD ERROR:",
-            error_text
+            "YOUTUBE PROCESS ERROR:",
+            str(error)[:MAX_ERROR_LENGTH]
         )
 
         traceback.print_exc()
-
-        if row_number:
-
-            try:
-
-                update_fields(row_number, {
-                    "YouTube Status": "FAILED",
-                    "Last Error": error_text
-                })
-
-            except Exception as sheet_error:
-
-                print(
-                    "Google Sheet Update Error:",
-                    str(sheet_error)
-                )
 
         raise
 
@@ -479,8 +643,17 @@ def main():
 
             try:
                 os.remove(VIDEO_FILE)
-            except Exception:
-                pass
+
+                print(
+                    "Temporary video file deleted."
+                )
+
+            except Exception as cleanup_error:
+
+                print(
+                    "Temporary File Cleanup Error:",
+                    str(cleanup_error)
+                )
 
 
 if __name__ == "__main__":
