@@ -222,7 +222,7 @@ def upload_to_github_release(file_path, file_name):
     release_data = res.json()
 
     release_id = str(release_data["id"])
-    upload_url = release_data["upload_url"].split("{")
+    upload_url = release_data["upload_url"].split("{")[0]
 
     upload_headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
