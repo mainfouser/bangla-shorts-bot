@@ -23,7 +23,7 @@ from playwright.sync_api import sync_playwright
 # - "bn-BD-PradeepNeural" (বাংলাদেশি স্মার্ট পুরুষ কণ্ঠ - রেকমেন্ডেড)
 # - "bn-IN-BashkarNeural" (ভারতীয় বাংলা পুরুষ কণ্ঠ)
 # ============================================================
-VOICE_NAME = "bn-BD-PradeepNeural"
+VOICE_NAME = "bn-IN-BashkarNeural"
 
 # গিটহাব ও ফাইল কনফিগারেশন
 GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "mainfouser/bangla-shorts-bot")
