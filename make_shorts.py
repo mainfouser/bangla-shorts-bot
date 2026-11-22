@@ -92,7 +92,7 @@ def clean_voiceover_script(text: str) -> str:
         flags=re.IGNORECASE,
     )
     text = re.sub(r"https?://(?:www\.)?homebdinfo\.com\S*", "হোম বিডি ইনফো ডট কম", text, flags=re.IGNORECASE)
-    text = re.sub(r"(?:www\.)?homebdinfo\.com", "হোম বিডি ইনফো ডট কম", text, flags=re.IGNORECASE)
+    text = re.sub(r" (?:www\.)?homebdinfo\.com ", "হোম বিডি ইনফো ডট কম", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -699,13 +699,17 @@ def send_telegram_for_approval(video_path: str, row_num: int, title: str, post_u
         f"🎬 <b>নতুন Bangla Shorts প্রস্তুত!</b>\n\n"
         f"📌 <b>শিরোনাম:</b> {title}\n"
         f"🔗 <b>পোস্ট:</b> {post_url}\n"
-        f"📊 <b>Sheet Row:</b> {row_num}"
+        f"📊 <b>Sheet Row:</b> {row_num}\n\n"
+        f"💡 <i>Approve দিলে ৩০ মিনিটের মধ্যে পোস্ট হবে, অথবা Schedule বাটনে সময় ঠিক করুন।</i>"
     )
     reply_markup = json.dumps(
         {
             "inline_keyboard": [
                 [
-                    {"text": "✅ Approve", "callback_data": f"APPROVE_{row_num}"},
+                    {"text": "✅ Approve (30m)", "callback_data": f"APPROVE_{row_num}"},
+                    {"text": "⏰ Schedule", "callback_data": f"SCHEDULE_{row_num}"},
+                ],
+                [
                     {"text": "❌ Reject", "callback_data": f"REJECT_{row_num}"},
                 ]
             ]
