@@ -22,8 +22,8 @@ from playwright.sync_api import sync_playwright
 # স্মার্ট পুরুষ কণ্ঠ (প্রস্তাবিত): "bn-BD-PradeepNeural"
 # বিকল্প পুরুষ কণ্ঠ: "bn-IN-BashkarNeural"
 # নারী কণ্ঠ: "bn-BD-NabanitaNeural" বা "bn-IN-TanishaaNeural"
-VOICE_NAME = "bn-BD-PradeepNeural"
-BASE_RATE = "+9%"
+VOICE_NAME = "bn-IN-BashkarNeural"
+BASE_RATE = "+11%"
 BASE_PITCH = "-3Hz"
 
 # ভিডিও ও মিউজিক সেটিংস
