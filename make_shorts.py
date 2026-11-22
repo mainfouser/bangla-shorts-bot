@@ -28,9 +28,14 @@ from PIL import Image, ImageDraw, ImageFont
 #   - "bn-BD-PradeepNeural"   (পুরুষ - বাংলাদেশী বাংলা)
 #   - "bn-BD-NabanitaNeural"  (নারী - বাংলাদেশী বাংলা)
 #   - "bn-IN-TanishaaNeural"  (নারী - ভারতীয় বাংলা)
-VOICE_NAME = "bn-IN-BashkarNeural"
-VOICE_RATE = "+8%"
-VOICE_PITCH = "-2Hz"
+
+# --- ভয়েস কনফিগারেশন (শুধুমাত্র স্মার্ট পুরুষ কণ্ঠ) ---
+VOICE_NAME = "bn-BD-PradeepNeural"   # বাংলাদেশি স্মার্ট পুরুষ কণ্ঠ (অথবা "bn-IN-BashkarNeural")
+VOICE_RATE = "+12%"                  # কথা বলার গতি একটু স্মার্ট ও প্রাণবন্ত রাখতে (+10% থেকে +15%)
+VOICE_PITCH = "-4Hz"                 # কণ্ঠস্বর একটু গম্ভীর ও ভরাট করতে (-3Hz থেকে -5Hz)
+
+
+
 # ==============================================================================
 
 # Video & Design Settings
