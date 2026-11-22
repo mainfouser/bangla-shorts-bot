@@ -14,24 +14,24 @@ from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_videoclips
 # 1. CONFIGURATION & ENVIRONMENT VARIABLES
 # ============================================================
 SHEET_NAME = "Shorts_Queue"
-SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
+SHEET_ID = os.environ.get("SHEET_ID")
 GOOGLE_CREDS_JSON = os.environ.get("GOOGLE_CREDENTIALS")
-PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")
+PIXABAY_API_KEY = os.environ.get("PIXABAY_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "mainfouser/bangla-shorts-bot")
 
-VOICE_NAME = "bn-BD-NabanitaNeural"
+VOICE_NAME = "bn-BD-NabanitaNeural"  # অথবা: "bn-BD-PradeepNeural"
 
 
 # ============================================================
 # 2. GOOGLE SHEET CONNECTION
 # ============================================================
 def get_sheet():
-    if not GOOGLE_CREDS_JSON or not SPREADSHEET_ID:
-        raise ValueError("GOOGLE_CREDENTIALS বা SPREADSHEET_ID পাওয়া যায়নি।")
-    
+    if not GOOGLE_CREDS_JSON or not SHEET_ID:
+        raise ValueError("GOOGLE_CREDENTIALS বা SHEET_ID পাওয়া যায়নি।")
+
     creds_dict = json.loads(GOOGLE_CREDS_JSON)
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
@@ -39,7 +39,7 @@ def get_sheet():
     ]
     creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     client = gspread.authorize(creds)
-    return client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
+    return client.open_by_key(SHEET_ID).worksheet(SHEET_NAME)
 
 
 def get_header_map(sheet):
@@ -68,9 +68,9 @@ async def _generate_tts(text, output_file):
 def create_voiceover(script_text):
     raw_audio = "raw_voice.mp3"
     final_audio = "voice.mp3"
-    
+
     asyncio.run(_generate_tts(script_text, raw_audio))
-    
+
     cmd = [
         "ffmpeg", "-y", "-i", raw_audio,
         "-ar", "44100", "-ac", "1", "-b:a", "192k",
@@ -81,16 +81,16 @@ def create_voiceover(script_text):
 
 
 # ============================================================
-# 4. STOCK VIDEO DOWNLOADER (PEXELS)
+# 4. STOCK VIDEO DOWNLOADER (PIXABAY API)
 # ============================================================
-def download_pexels_videos(keywords, target_duration):
-    if not PEXELS_API_KEY:
-        raise ValueError("PEXELS_API_KEY পাওয়া যায়নি।")
-        
-    headers = {"Authorization": PEXELS_API_KEY}
+def download_pixabay_videos(keywords, target_duration):
+    if not PIXABAY_API_KEY:
+        raise ValueError("PIXABAY_API_KEY পাওয়া যায়নি।")
+
     downloaded_files = []
+    used_video_ids = set()
     total_dur = 0.0
-    
+
     kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
     if not kw_list:
         kw_list = ["bangladesh", "nature", "technology"]
@@ -98,27 +98,41 @@ def download_pexels_videos(keywords, target_duration):
     idx = 0
     while total_dur < target_duration and idx < 15:
         query = kw_list[idx % len(kw_list)]
-        url = f"https://api.pexels.com/videos/search?query={query}&orientation=portrait&size=medium&per_page=5"
-        res = requests.get(url, headers=headers, timeout=15)
-        
+        url = (
+            f"https://pixabay.com/api/videos/"
+            f"?key={PIXABAY_API_KEY}&q={requests.utils.quote(query)}"
+            f"&orientation=vertical&per_page=10"
+        )
+        res = requests.get(url, timeout=15)
+
         if res.status_code == 200:
-            videos = res.json().get("videos", [])
-            if videos:
-                video = random.choice(videos)
-                video_files = video.get("video_files", [])
-                chosen_file = next(
-                    (vf for vf in video_files if vf.get("width", 0) >= 720 and vf.get("file_type") == "video/mp4"),
-                    video_files[0] if video_files else None
+            hits = res.json().get("hits", [])
+            # আগে ব্যবহার হয়নি এমন ভিডিও বাছাই
+            available_hits = [h for h in hits if h.get("id") not in used_video_ids]
+            if not available_hits and hits:
+                available_hits = hits
+
+            if available_hits:
+                video = random.choice(available_hits)
+                used_video_ids.add(video.get("id"))
+                videos_dict = video.get("videos", {})
+
+                # Medium বা Large কোয়ালিটির MP4 লিংক নেওয়া
+                chosen_file = (
+                    videos_dict.get("medium")
+                    or videos_dict.get("large")
+                    or videos_dict.get("small")
                 )
-                if chosen_file:
-                    v_url = chosen_file["link"]
+
+                if chosen_file and chosen_file.get("url"):
+                    v_url = chosen_file["url"]
                     file_name = f"clip_{idx}.mp4"
                     with requests.get(v_url, stream=True, timeout=30) as r:
                         r.raise_for_status()
                         with open(file_name, "wb") as f:
                             for chunk in r.iter_content(chunk_size=8192):
                                 f.write(chunk)
-                    
+
                     clip = VideoFileClip(file_name)
                     total_dur += clip.duration
                     clip.close()
@@ -126,8 +140,8 @@ def download_pexels_videos(keywords, target_duration):
         idx += 1
 
     if not downloaded_files:
-        raise RuntimeError("Pexels থেকে কোনো ব্যাকগ্রাউন্ড ভিডিও ডাউনলোড করা যায়নি।")
-        
+        raise RuntimeError("Pixabay থেকে কোনো ব্যাকগ্রাউন্ড ভিডিও ডাউনলোড করা যায়নি।")
+
     return downloaded_files
 
 
@@ -137,30 +151,31 @@ def download_pexels_videos(keywords, target_duration):
 def build_short_video(audio_path, clip_paths, output_path="final_short.mp4"):
     audio = AudioFileClip(audio_path)
     target_duration = audio.duration + 0.5
-    
+
     clips = []
     current_dur = 0.0
-    
+
     for path in clip_paths:
         if current_dur >= target_duration:
             break
         clip = VideoFileClip(path).without_audio()
-        
+
+        # 1080x1920 (9:16) রিসাইজ ও ক্রপ
         clip = clip.resize(height=1920)
         if clip.w < 1080:
             clip = clip.resize(width=1080)
         clip = clip.crop(x_center=clip.w / 2, y_center=clip.h / 2, width=1080, height=1920)
-        
+
         needed = target_duration - current_dur
         if clip.duration > needed:
             clip = clip.subclip(0, needed)
-            
+
         clips.append(clip)
         current_dur += clip.duration
 
     final_video = concatenate_videoclips(clips, method="compose")
     final_video = final_video.set_audio(audio)
-    
+
     final_video.write_videofile(
         output_path,
         fps=30,
@@ -169,12 +184,12 @@ def build_short_video(audio_path, clip_paths, output_path="final_short.mp4"):
         threads=4,
         preset="medium"
     )
-    
+
     audio.close()
     final_video.close()
     for c in clips:
         c.close()
-        
+
     print("ভিডিও তৈরি সফল।")
     return output_path
 
@@ -207,13 +222,13 @@ def upload_to_github_release(file_path, file_name):
     release_data = res.json()
 
     release_id = str(release_data["id"])
-    upload_url = release_data["upload_url"].split("{")[0]
+    upload_url = release_data["upload_url"].split("{")
 
     upload_headers = {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Content-Type": "video/mp4"
     }
-    
+
     with open(file_path, "rb") as f:
         up_res = requests.post(
             upload_url,
@@ -238,7 +253,7 @@ def send_telegram_approval(video_path, row_num, title, download_url):
         raise ValueError("TELEGRAM_BOT_TOKEN বা TELEGRAM_CHAT_ID পাওয়া যায়নি।")
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVideo"
-    
+
     caption = (
         f"🎬 <b>নতুন Shorts ভিডিও প্রস্তুত!</b>\n\n"
         f"📌 <b>Title:</b> {title}\n"
@@ -292,19 +307,24 @@ def process_row(sheet, row_num, row_data, header_map):
         "Video Status": "GENERATING"
     })
 
+    # ১. ভয়েসওভার তৈরি
     audio_path = create_voiceover(script)
     audio_clip = AudioFileClip(audio_path)
     duration = audio_clip.duration
     audio_clip.close()
 
-    clip_paths = download_pexels_videos(keywords, duration)
+    # ২. Pixabay থেকে ক্লিপ ডাউনলোড ও ভিডিও রেন্ডার
+    clip_paths = download_pixabay_videos(keywords, duration)
     video_path = build_short_video(audio_path, clip_paths, "final_short.mp4")
 
+    # ৩. GitHub Releases-এ আপলোড
     file_name = f"short_row_{row_num}_{int(time.time())}.mp4"
     release_id, release_url = upload_to_github_release(video_path, file_name)
 
+    # ৪. টেলিগ্রামে এপ্রুভালের জন্য পাঠানো
     tg_file_id, tg_msg_id = send_telegram_approval(video_path, row_num, title, release_url)
 
+    # ৫. Google Sheet আপডেট করা
     update_cells(sheet, row_num, header_map, {
         "Status": "PENDING_APPROVAL",
         "Video Status": "READY",
