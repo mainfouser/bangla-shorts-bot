@@ -1,13 +1,14 @@
 import os
 import re
 import json
+import math
 import time
-import shutil
 import asyncio
-import textwrap
+import random
+import tempfile
 import subprocess
-import urllib.parse
 from pathlib import Path
+from typing import List, Dict, Optional, Tuple
 
 import requests
 import gspread
@@ -17,728 +18,806 @@ from PIL import Image, ImageDraw, ImageFont
 from playwright.sync_api import sync_playwright
 
 # ============================================================
-# ১. ভয়েস ও ডিজাইন কনফিগারেশন (সহজে পরিবর্তনের জন্য)
+# ভয়েস কনফিগারেশন (শুধুমাত্র স্মার্ট ও ন্যাচারাল পুরুষ কণ্ঠ)
+# সহজেই পরিবর্তন করতে নিচের VOICE_NAME পরিবর্তন করুন:
+# - "bn-BD-PradeepNeural" (বাংলাদেশি স্মার্ট পুরুষ কণ্ঠ - রেকমেন্ডেড)
+# - "bn-IN-BashkarNeural" (ভারতীয় বাংলা পুরুষ কণ্ঠ)
 # ============================================================
-# স্মার্ট পুরুষ কণ্ঠ (প্রস্তাবিত): "bn-BD-PradeepNeural"
-# বিকল্প পুরুষ কণ্ঠ: "bn-IN-BashkarNeural"
-# নারী কণ্ঠ: "bn-BD-NabanitaNeural" বা "bn-IN-TanishaaNeural"
-VOICE_NAME = "bn-IN-BashkarNeural"
-BASE_RATE = "+11%"
-BASE_PITCH = "-3Hz"
+VOICE_NAME = "bn-BD-PradeepNeural"
 
-# ভিডিও ও মিউজিক সেটিংস
+# গিটহাব ও ফাইল কনফিগারেশন
+GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "mainfouser/bangla-shorts-bot")
+SHEET_NAME = "Shorts_Queue"
+BGM_FILE = "bgm.mp3"
+LOGO_FILE = "logo.png"
+BGM_VOLUME = 0.17  # ১৭% ব্যাকগ্রাউন্ড মিউজিক ভলিউম
+
+# ভিডিও ডাইমেনশন
 VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920
 FPS = 30
-BGM_VOLUME = 0.17  # ১৭% ব্যাকগ্রাউন্ড মিউজিক ভলিউম
-MAX_SCROLL_PX = 2600  # ধীরগতির স্মুথ স্ক্রোলিংয়ের জন্য সর্বোচ্চ স্ক্রল দূরত্ব
+MAX_SCROLL_PX = 2600  # ধীরগতির স্মুথ স্ক্রোলিংয়ের জন্য সর্বোচ্চ স্ক্রল সীমা
 
-# ব্র্যান্ডিং সেটিংস
-SITE_DISPLAY_URL = "homebdinfo.com"
-TOP_BADGE_TEXT = f"বিস্তারিত তথ্য ও আবেদন: {SITE_DISPLAY_URL}"
-CTA_TITLE_TEXT = "সম্পূর্ণ তথ্য ও সরাসরি আবেদন লিংক পেতে"
-CTA_SUBTITLE_TEXT = f"আজই Google-এ সার্চ করুন: {SITE_DISPLAY_URL}"
-
-# ফোল্ডার ও ফাইল পাথ
-WORK_DIR = Path("temp_work")
-BGM_FILE = Path("bgm.mp3")
-LOGO_FILE = Path("logo.png")
-SHEET_NAME = "Shorts_Queue"
-
-GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "mainfouser/bangla-shorts-bot")
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-SHEET_ID = os.environ.get("SHEET_ID", "")
-PIXABAY_API_KEY = os.environ.get("PIXABAY_API_KEY", "")
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
-GOOGLE_CREDENTIALS_RAW = os.environ.get("GOOGLE_CREDENTIALS", "")
+# ফন্ট পাথ (Ubuntu / GitHub Actions)
+BENGALI_FONT_PATHS = [
+    "/usr/share/fonts/truetype/noto/NotoSansBengali-Bold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansBengali-Regular.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansBengali-Bold.ttf",
+]
+LATIN_FONT_PATHS = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+]
 
 
-# ============================================================
-# ২. ফন্ট ও টেক্সট রেন্ডারিং হেল্পার (বাংলা + ইংরেজি মিক্সড সাপোর্ট)
-# ============================================================
-def find_fonts():
-    bn_candidates = [
-        "/usr/share/fonts/truetype/noto/NotoSansBengali-Bold.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSansBengali-Regular.ttf",
-        "/usr/share/fonts/opentype/noto/NotoSansBengali-Bold.ttf",
-    ]
-    en_candidates = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
-    ]
-    bn_font = next((p for p in bn_candidates if os.path.exists(p)), None)
-    en_font = next((p for p in en_candidates if os.path.exists(p)), bn_font)
-    return bn_font, en_font
-
-
-BN_FONT_PATH, EN_FONT_PATH = find_fonts()
-
-
-def load_font(path, size):
-    try:
-        if path and os.path.exists(path):
-            return ImageFont.truetype(path, size=size)
-    except Exception:
-        pass
+def find_font(paths: List[str], size: int) -> ImageFont.FreeTypeFont:
+    for p in paths:
+        if os.path.exists(p):
+            try:
+                return ImageFont.truetype(p, size)
+            except Exception:
+                pass
     return ImageFont.load_default()
 
 
-def split_by_script(text):
-    """বাংলা ও ইংরেজি অংশ আলাদা করে সঠিক ফন্টে রেন্ডার করার জন্য ভাগ করে"""
-    tokens = re.findall(r"[A-Za-z0-9._:/-]+|[^A-Za-z0-9._:/-]+", text)
-    result = []
-    for tok in tokens:
-        is_ascii = bool(re.match(r"^[A-Za-z0-9._:/-]+$", tok))
-        result.append((tok, is_ascii))
-    return result
-
-
-def measure_mixed_text(draw, text, size):
-    bn_f = load_font(BN_FONT_PATH, size)
-    en_f = load_font(EN_FONT_PATH, int(size * 0.92))
-    total_w = 0
-    max_h = size
-    for tok, is_ascii in split_by_script(text):
-        font = en_f if is_ascii else bn_f
-        bbox = draw.textbbox((0, 0), tok, font=font)
-        total_w += (bbox[2] - bbox[0])
-        max_h = max(max_h, bbox[3] - bbox[1])
-    return total_w, max_h
-
-
-def draw_mixed_text(draw, xy, text, size, fill=(255, 255, 255, 255)):
-    x, y = xy
-    bn_f = load_font(BN_FONT_PATH, size)
-    en_f = load_font(EN_FONT_PATH, int(size * 0.92))
-    for tok, is_ascii in split_by_script(text):
-        font = en_f if is_ascii else bn_f
-        y_offset = int(size * 0.06) if is_ascii else 0
-        draw.text((x, y + y_offset), tok, font=font, fill=fill)
-        bbox = draw.textbbox((0, 0), tok, font=font)
-        x += (bbox[2] - bbox[0])
-
-
-def create_banner_png(out_path, text, width=960, height=96, font_size=34,
-                      bg_color=(15, 23, 42, 235), border_color=(56, 189, 248, 255),
-                      text_color=(255, 255, 255, 255)):
-    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    draw.rounded_rectangle(
-        [4, 4, width - 4, height - 4],
-        radius=24,
-        fill=bg_color,
-        outline=border_color,
-        width=4
-    )
-    tw, th = measure_mixed_text(draw, text, font_size)
-    tx = max(24, (width - tw) // 2)
-    ty = max(12, (height - th) // 2 - 4)
-    draw_mixed_text(draw, (tx, ty), text, font_size, fill=text_color)
-    img.save(out_path, "PNG")
-
-
-def create_title_card_png(out_path, title_text, width=960, height=220):
-    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    draw.rounded_rectangle(
-        [6, 6, width - 6, height - 6],
-        radius=28,
-        fill=(10, 15, 30, 230),
-        outline=(250, 204, 21, 255),
-        width=4
-    )
-    tag = "গুরুত্বপূর্ণ আপডেট • homebdinfo.com"
-    draw_mixed_text(draw, (36, 22), tag, 26, fill=(250, 204, 21, 255))
-
-    wrapped = textwrap.wrap(title_text, width=34)[:3]
-    y_cursor = 68
-    for line in wrapped:
-        draw_mixed_text(draw, (36, y_cursor), line, 36, fill=(255, 255, 255, 255))
-        y_cursor += 46
-    img.save(out_path, "PNG")
-
-
-def create_cta_card_png(out_path, width=980, height=230):
-    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    draw.rounded_rectangle(
-        [6, 6, width - 6, height - 6],
-        radius=30,
-        fill=(17, 24, 39, 245),
-        outline=(34, 197, 94, 255),
-        width=5
-    )
-    tw1, _ = measure_mixed_text(draw, CTA_TITLE_TEXT, 34)
-    draw_mixed_text(draw, ((width - tw1) // 2, 34), CTA_TITLE_TEXT, 34, fill=(255, 255, 255, 255))
-
-    tw2, _ = measure_mixed_text(draw, CTA_SUBTITLE_TEXT, 38)
-    draw_mixed_text(draw, ((width - tw2) // 2, 105), CTA_SUBTITLE_TEXT, 38, fill=(74, 222, 128, 255))
-    img.save(out_path, "PNG")
-
-
-# ============================================================
-# ৩. গুগল শিট কানেকশন
-# ============================================================
 def get_google_sheet():
-    if not GOOGLE_CREDENTIALS_RAW or not SHEET_ID:
-        raise ValueError("GOOGLE_CREDENTIALS অথবা SHEET_ID সেট করা নেই।")
-    creds_dict = json.loads(GOOGLE_CREDENTIALS_RAW)
+    creds_json = os.environ.get("GOOGLE_CREDENTIALS", "").strip()
+    sheet_id = os.environ.get("SHEET_ID", "").strip()
+    if not creds_json or not sheet_id:
+        raise RuntimeError("GOOGLE_CREDENTIALS বা SHEET_ID সেট করা নেই।")
+
+    creds_dict = json.loads(creds_json)
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
+        "https://www.googleapis.com/auth/drive",
     ]
     creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     client = gspread.authorize(creds)
-    return client.open_by_key(SHEET_ID).worksheet(SHEET_NAME)
+    return client.open_by_key(sheet_id).worksheet(SHEET_NAME)
 
 
-def get_header_map(sheet):
-    headers = sheet.row_values(1)
-    return {h.strip(): idx + 1 for idx, h in enumerate(headers) if h.strip()}
-
-
-def update_row_cells(sheet, row_idx, header_map, updates):
-    for col_name, val in updates.items():
-        if col_name in header_map:
-            sheet.update_cell(row_idx, header_map[col_name], str(val))
-
-
-# ============================================================
-# ৪. স্ক্রিপ্ট ক্লিনিং ও ন্যাচারাল ভয়েসওভার জেনারেশন
-# ============================================================
-def clean_script_for_tts(script_text):
-    text = str(script_text or "").strip()
+def clean_voiceover_script(text: str) -> str:
+    text = str(text or "").strip()
+    # ডাবল উচ্চারণ প্রতিরোধ (যেমন: হোম বিডি ইনফো ডট কম homebdinfo.com)
     text = re.sub(
-        r"(হোম\s*বিডি\s*ইনফো\s*ডট\s*কম)\s*(www\.)?homebdinfo\.com",
-        r"\1",
+        r"হোম\s*বিডি\s*ইনফো\s*ডট\s*কম\s*\(?homebdinfo\.com\)?",
+        "হোম বিডি ইনফো ডট কম",
         text,
-        flags=re.IGNORECASE
+        flags=re.IGNORECASE,
     )
     text = re.sub(
-        r"(www\.)?homebdinfo\.com\s*(হোম\s*বিডি\s*ইনফো\s*ডট\s*কম)",
-        r"\2",
+        r"homebdinfo\.com\s*\(?হোম\s*বিডি\s*ইনফো\s*ডট\s*কম\)?",
+        "হোম বিডি ইনফো ডট কম",
         text,
-        flags=re.IGNORECASE
+        flags=re.IGNORECASE,
     )
-    text = re.sub(r"https?://(www\.)?homebdinfo\.com\S*", "হোম বিডি ইনফো ডট কম", text, flags=re.IGNORECASE)
-    text = re.sub(r"(www\.)?homebdinfo\.com", "হোম বিডি ইনফো ডট কম", text, flags=re.IGNORECASE)
+    text = re.sub(r"https?://(?:www\.)?homebdinfo\.com\S*", "হোম বিডি ইনফো ডট কম", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?:www\.)?homebdinfo\.com", "হোম বিডি ইনফো ডট কম", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
 
-def split_sentences(text):
-    parts = re.split(r"(?<=[।!?])\s+", text)
-    return [p.strip() for p in parts if p.strip()]
+def split_sentences_for_tts(script: str) -> List[str]:
+    parts = [p.strip() for p in re.split(r"(?<=[।!?\.])\s+", script) if p.strip()]
+    return parts if parts else [script]
 
 
-async def synthesize_expressive_voice(sentences, work_dir):
-    """প্রতিটি বাক্যের ধরন অনুযায়ী কণ্ঠের ওঠানামা ও বিরতি দিয়ে অডিও তৈরি করে"""
-    segment_files = []
-    timings = []
-    current_time = 0.0
+def get_prosody_for_sentence(sentence: str, idx: int, total: int) -> Tuple[str, str, float]:
+    """বাক্যের ধরন অনুযায়ী মানুষের মতো ন্যাচারাল গতি, সুর ও বিরতি নির্ধারণ করে।"""
+    if idx == 0:
+        # Hook বাক্য: প্রাণবন্ত ও আকর্ষণীয়
+        return "+12%", "-1Hz", 0.35
+    if "?" in sentence or "কীভাবে" in sentence or "কেন" in sentence or "কী" in sentence:
+        # প্রশ্নবোধক বাক্য: সুর সামান্য উপরে উঠবে
+        return "+8%", "+3Hz", 0.35
+    if idx == total - 1:
+        # শেষ বাক্য (CTA): গুরুত্ব ও আহ্বান বোঝাতে ভরাট ও ধীর কণ্ঠ
+        return "+5%", "-5Hz", 0.40
+    # সাধারণ তথ্যমূলক বাক্য
+    return "+8%", "-3Hz", 0.28
+
+
+async def _synthesize_chunk(text: str, out_path: str, rate: str, pitch: str):
+    communicate = edge_tts.Communicate(text=text, voice=VOICE_NAME, rate=rate, pitch=pitch)
+    await communicate.save(out_path)
+
+
+def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Dict]]:
+    """প্রতিটি বাক্য আলাদাভাবে ন্যাচারাল টোনে তৈরি করে FFmpeg দিয়ে জোড়া লাগায় এবং সাবটাইটেল টাইমিং বের করে।"""
+    cleaned = clean_voiceover_script(script)
+    sentences = split_sentences_for_tts(cleaned)
     total = len(sentences)
 
+    segment_files = []
+    subtitle_segments = []
+    current_time = 0.0
+
     for idx, sentence in enumerate(sentences):
-        seg_mp3 = work_dir / f"seg_{idx:03d}.mp3"
-        seg_wav = work_dir / f"seg_{idx:03d}.wav"
+        rate, pitch, pause_sec = get_prosody_for_sentence(sentence, idx, total)
+        raw_mp3 = os.path.join(work_dir, f"tts_{idx}.mp3")
+        wav_seg = os.path.join(work_dir, f"tts_{idx}.wav")
+        sil_wav = os.path.join(work_dir, f"sil_{idx}.wav")
 
-        if idx == 0:
-            rate = "+12%"
-            pitch = "-1Hz"
-            pause_sec = 0.35
-        elif sentence.endswith("?"):
-            rate = "+9%"
-            pitch = "+3Hz"
-            pause_sec = 0.40
-        elif idx == total - 1:
-            rate = "+5%"
-            pitch = "-4Hz"
-            pause_sec = 0.45
-        else:
-            rate = "+9%" if idx % 2 == 1 else "+7%"
-            pitch = "-3Hz" if idx % 2 == 1 else "-2Hz"
-            pause_sec = 0.28
+        asyncio.run(_synthesize_chunk(sentence, raw_mp3, rate, pitch))
 
-        communicate = edge_tts.Communicate(
-            text=sentence,
-            voice=VOICE_NAME,
-            rate=rate,
-            pitch=pitch
+        # MP3 থেকে 44100Hz Stereo WAV এ কনভার্ট
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", raw_mp3, "-ar", "44100", "-ac", "2", wav_seg],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
-        await communicate.save(str(seg_mp3))
 
-        subprocess.run([
-            "ffmpeg", "-y", "-i", str(seg_mp3),
-            "-af", f"apad=pad_dur={pause_sec}",
-            "-ar", "44100", "-ac", "2",
-            str(seg_wav)
-        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # অডিওর দৈর্ঘ্য পরিমাপ
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                wav_seg,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        speech_dur = float(probe.stdout.strip())
 
-        dur = get_media_duration(seg_wav)
-        timings.append({
-            "text": sentence,
-            "start": current_time,
-            "end": current_time + dur
-        })
-        current_time += dur
-        segment_files.append(seg_wav)
-
-    concat_list = work_dir / "audio_list.txt"
-    with open(concat_list, "w", encoding="utf-8") as f:
-        for wav in segment_files:
-            f.write(f"file '{wav.resolve()}'\n")
-
-    final_voice = work_dir / "voice_full.wav"
-    subprocess.run([
-        "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-        "-i", str(concat_list), "-c", "copy", str(final_voice)
-    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    return final_voice, timings, current_time
-
-
-def get_media_duration(file_path):
-    res = subprocess.run([
-        "ffprobe", "-v", "error", "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)
-    ], capture_output=True, text=True, check=True)
-    return float(res.stdout.strip())
-
-
-# ============================================================
-# ৫. ওয়েবসাইটের মোবাইল স্ক্রিনশট ও স্টক ফুটেজ সংগ্রহ
-# ============================================================
-def capture_mobile_screenshot(post_url, out_png):
-    target_url = post_url if post_url.startswith("http") else f"https://www.{SITE_DISPLAY_URL}"
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                viewport={"width": 390, "height": 844},
-                device_scale_factor=2.8,
-                is_mobile=True,
-                has_touch=True,
-                user_agent=(
-                    "Mozilla/5.0 (Linux; Android 13; Pixel 7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Mobile Safari/537.36"
-                )
-            )
-            page = context.new_page()
-            page.goto(target_url, wait_until="networkidle", timeout=35000)
-            page.wait_for_timeout(2000)
-
-            page.add_style_tag(content="""
-                body { zoom: 1.08 !important; }
-                header, .sticky, .fixed-top, [id*='cookie'], [class*='popup'] {
-                    position: static !important;
+        # ছোট সাবটাইটেল চাঙ্কে ভাগ করা যাতে স্ক্রিনে লেখা কখনো না কাটে
+        chunks = split_subtitle_chunks(sentence, max_chars=48)
+        total_chars = sum(len(c) for c in chunks) or 1
+        t_cursor = current_time
+        for ch in chunks:
+            ch_dur = speech_dur * (len(ch) / total_chars)
+            subtitle_segments.append(
+                {
+                    "text": ch,
+                    "start": t_cursor,
+                    "end": t_cursor + ch_dur,
                 }
-            """)
-            page.wait_for_timeout(800)
-            page.screenshot(path=str(out_png), full_page=True)
-            browser.close()
-            return True
-    except Exception as e:
-        print(f"Screenshot warning: {e}")
-        fallback = Image.new("RGB", (1080, 3200), (15, 23, 42))
-        fallback.save(out_png)
-        return False
+            )
+            t_cursor += ch_dur
+
+        segment_files.append(wav_seg)
+        current_time += speech_dur
+
+        # স্বাভাবিক বিরতি (Silence) যুক্ত করা
+        if pause_sec > 0:
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "anullsrc=r=44100:cl=stereo",
+                    "-t",
+                    f"{pause_sec:.2f}",
+                    sil_wav,
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            segment_files.append(sil_wav)
+            current_time += pause_sec
+
+    concat_list = os.path.join(work_dir, "audio_concat.txt")
+    with open(concat_list, "w", encoding="utf-8") as f:
+        for sf in segment_files:
+            f.write(f"file '{sf}'\n")
+
+    final_voice_wav = os.path.join(work_dir, "voiceover_full.wav")
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list, "-c", "copy", final_voice_wav],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return final_voice_wav, subtitle_segments
 
 
-def download_pixabay_clip(keywords_str, work_dir):
-    if not PIXABAY_API_KEY:
-        return None
-    keywords = [k.strip() for k in keywords_str.split(",") if k.strip()]
-    if not keywords:
-        keywords = ["technology mobile", "information"]
+def split_subtitle_chunks(sentence: str, max_chars: int = 48) -> List[str]:
+    words = sentence.split()
+    chunks = []
+    cur = []
+    cur_len = 0
+    for w in words:
+        if cur and cur_len + len(w) + 1 > max_chars:
+            chunks.append(" ".join(cur))
+            cur = [w]
+            cur_len = len(w)
+        else:
+            cur.append(w)
+            cur_len += len(w) + (1 if cur_len > 0 else 0)
+    if cur:
+        chunks.append(" ".join(cur))
+    return chunks
 
-    for kw in keywords:
+
+def render_mixed_text_line(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    text: str,
+    bn_font: ImageFont.FreeTypeFont,
+    en_font: ImageFont.FreeTypeFont,
+    fill=(255, 255, 255, 255),
+):
+    """বাংলা ও ইংরেজি অক্ষর আলাদা ফন্টে রেন্ডার করে যাতে ইংরেজি অক্ষর সাদা বক্স না হয়।"""
+    tokens = re.findall(r"[A-Za-z0-9\./:\-_@]+|[^A-Za-z0-9\./:\-_@]+", text)
+    cursor_x = x
+    for tok in tokens:
+        is_latin = bool(re.match(r"^[A-Za-z0-9\./:\-_@]+$", tok))
+        fnt = en_font if is_latin else bn_font
+        draw.text((cursor_x, y), tok, font=fnt, fill=fill)
+        bbox = draw.textbbox((0, 0), tok, font=fnt)
+        cursor_x += bbox[2] - bbox[0]
+
+
+def measure_mixed_text_width(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    bn_font: ImageFont.FreeTypeFont,
+    en_font: ImageFont.FreeTypeFont,
+) -> int:
+    tokens = re.findall(r"[A-Za-z0-9\./:\-_@]+|[^A-Za-z0-9\./:\-_@]+", text)
+    total_w = 0
+    for tok in tokens:
+        is_latin = bool(re.match(r"^[A-Za-z0-9\./:\-_@]+$", tok))
+        fnt = en_font if is_latin else bn_font
+        bbox = draw.textbbox((0, 0), tok, font=fnt)
+        total_w += bbox[2] - bbox[0]
+    return total_w
+
+
+def wrap_text_by_pixel(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    bn_font: ImageFont.FreeTypeFont,
+    en_font: ImageFont.FreeTypeFont,
+    max_width: int,
+) -> List[str]:
+    words = text.split()
+    lines = []
+    cur = []
+    for w in words:
+        test = " ".join(cur + [w])
+        if cur and measure_mixed_text_width(draw, test, bn_font, en_font) > max_width:
+            lines.append(" ".join(cur))
+            cur = [w]
+        else:
+            cur.append(w)
+    if cur:
+        lines.append(" ".join(cur))
+    return lines
+
+
+def create_subtitle_png(text: str, out_path: str):
+    """Pillow দিয়ে নিরাপদ মার্জিনসহ ট্রান্সপারেন্ট PNG সাবটাইটেল কার্ড তৈরি করে (লেখা কখনো কাটবে না)।"""
+    canvas_w = 1000
+    canvas_h = 280
+    img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    bn_font = find_font(BENGALI_FONT_PATHS, 42)
+    en_font = find_font(LATIN_FONT_PATHS, 40)
+
+    max_text_w = 880
+    lines = wrap_text_by_pixel(draw, text, bn_font, en_font, max_text_w)
+    if len(lines) > 3:
+        lines = lines[:3]
+
+    line_height = 58
+    pad_x = 36
+    pad_y = 22
+
+    max_line_w = max(
+        (measure_mixed_text_width(draw, ln, bn_font, en_font) for ln in lines),
+        default=200,
+    )
+    box_w = min(canvas_w - 20, max_line_w + pad_x * 2)
+    box_h = len(lines) * line_height + pad_y * 2
+
+    box_x0 = (canvas_w - box_w) // 2
+    box_y0 = (canvas_h - box_h) // 2
+    box_x1 = box_x0 + box_w
+    box_y1 = box_y0 + box_h
+
+    # হালকা স্বচ্ছ কালো ব্যাকগ্রাউন্ড যাতে পেছনের ওয়েবসাইটও দেখা যায়
+    draw.rounded_rectangle(
+        [box_x0, box_y0, box_x1, box_y1],
+        radius=24,
+        fill=(12, 16, 24, 195),
+        outline=(255, 255, 255, 70),
+        width=2,
+    )
+
+    for i, ln in enumerate(lines):
+        lw = measure_mixed_text_width(draw, ln, bn_font, en_font)
+        lx = (canvas_w - lw) // 2
+        ly = box_y0 + pad_y + i * line_height
+        render_mixed_text_line(draw, lx, ly, ln, bn_font, en_font, fill=(255, 255, 255, 255))
+
+    img.save(out_path, "PNG")
+
+
+def create_top_banner_png(out_path: str):
+    """উপরের প্রমোশন ব্যাজ PNG তৈরি করে (বাংলা + ইংরেজি ফন্ট সাপোর্টসহ)।"""
+    w, h = 920, 96
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    bn_font = find_font(BENGALI_FONT_PATHS, 34)
+    en_font = find_font(LATIN_FONT_PATHS, 34)
+
+    draw.rounded_rectangle(
+        [10, 10, w - 10, h - 10],
+        radius=40,
+        fill=(11, 79, 108, 230),
+        outline=(255, 255, 255, 140),
+        width=3,
+    )
+    text = "বিস্তারিত তথ্য ও আবেদন: homebdinfo.com"
+    tw = measure_mixed_text_width(draw, text, bn_font, en_font)
+    render_mixed_text_line(draw, (w - tw) // 2, 26, text, bn_font, en_font, fill=(255, 255, 255, 255))
+    img.save(out_path, "PNG")
+
+
+def create_cta_banner_png(out_path: str):
+    """শেষ ৫ সেকেন্ডের কল-টু-অ্যাকশন (CTA) কার্ড PNG তৈরি করে।"""
+    w, h = 960, 180
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    bn_font = find_font(BENGALI_FONT_PATHS, 36)
+    en_font = find_font(LATIN_FONT_PATHS, 38)
+
+    draw.rounded_rectangle(
+        [10, 10, w - 10, h - 10],
+        radius=28,
+        fill=(245, 158, 11, 245),
+        outline=(255, 255, 255, 220),
+        width=4,
+    )
+    line1 = "সম্পূর্ণ তথ্য ও অনলাইন লিংক পেতে"
+    line2 = "Google-এ সার্চ করুন: homebdinfo.com"
+
+    w1 = measure_mixed_text_width(draw, line1, bn_font, en_font)
+    w2 = measure_mixed_text_width(draw, line2, bn_font, en_font)
+
+    render_mixed_text_line(draw, (w - w1) // 2, 32, line1, bn_font, en_font, fill=(17, 24, 39, 255))
+    render_mixed_text_line(draw, (w - w2) // 2, 96, line2, bn_font, en_font, fill=(17, 24, 39, 255))
+    img.save(out_path, "PNG")
+
+
+def capture_mobile_site_screenshot(post_url: str, out_png: str):
+    """Playwright দিয়ে খাঁটি মোবাইল ভিউপোর্টে ওয়েবসাইটের বড় ও স্পষ্ট স্ক্রিনশট নেয়।"""
+    target_url = post_url if post_url.startswith("http") else "https://www.homebdinfo.com"
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            viewport={"width": 390, "height": 844},
+            device_scale_factor=2.8,
+            is_mobile=True,
+            has_touch=True,
+            user_agent=(
+                "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+            ),
+        )
+        page = context.new_page()
         try:
-            q = urllib.parse.quote(kw)
-            url = f"https://pixabay.com/api/videos/?key={PIXABAY_API_KEY}&q={q}&per_page=5"
-            resp = requests.get(url, timeout=15).json()
+            page.goto(target_url, wait_until="networkidle", timeout=45000)
+        except Exception:
+            page.goto(target_url, wait_until="domcontentloaded", timeout=45000)
+
+        page.wait_for_timeout(2500)
+        # পপআপ বা কুকি ব্যানার থাকলে লুকানো এবং টেক্সট জুম সামান্য বাড়ানো
+        page.evaluate(
+            """() => {
+                document.body.style.zoom = "1.10";
+                const selectors = ['[id*="cookie"]', '[class*="cookie"]', '[class*="popup"]', '.adsbygoogle'];
+                selectors.forEach(sel => {
+                    document.querySelectorAll(sel).forEach(el => el.style.display = 'none');
+                });
+            }"""
+        )
+        page.wait_for_timeout(1000)
+        page.screenshot(path=out_png, full_page=True)
+        browser.close()
+
+    # ইমেজটিকে 1080px প্রস্থে রিসাইজ করা এবং সর্বোচ্চ উচ্চতা সীমিত রাখা
+    img = Image.open(out_png).convert("RGB")
+    scale = VIDEO_WIDTH / img.width
+    new_h = int(img.height * scale)
+    img = img.resize((VIDEO_WIDTH, new_h), Image.Resampling.LANCZOS)
+
+    max_allowed_h = VIDEO_HEIGHT + MAX_SCROLL_PX
+    if img.height > max_allowed_h:
+        img = img.crop((0, 0, VIDEO_WIDTH, max_allowed_h))
+    elif img.height < VIDEO_HEIGHT + 400:
+        padded = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT + 400), (245, 247, 250))
+        padded.paste(img, (0, 0))
+        img = padded
+
+    img.save(out_png, "PNG")
+    return img.height
+
+
+def download_pixabay_clip(keywords: str, out_mp4: str) -> Optional[str]:
+    api_key = os.environ.get("PIXABAY_API_KEY", "").strip()
+    if not api_key:
+        return None
+
+    kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
+    if not kw_list:
+        kw_list = ["technology", "smartphone", "office"]
+
+    for kw in kw_list:
+        try:
+            url = (
+                f"https://pixabay.com/api/videos/?key={api_key}"
+                f"&q={requests.utils.quote(kw)}&per_page=5&safesearch=true"
+            )
+            resp = requests.get(url, timeout=20).json()
             hits = resp.get("hits", [])
             if hits:
-                videos = hits[0].get("videos", {})
-                vid_url = (
-                    videos.get("medium", {}).get("url")
-                    or videos.get("small", {}).get("url")
-                )
-                if vid_url:
-                    out_mp4 = work_dir / "stock_clip.mp4"
-                    r = requests.get(vid_url, stream=True, timeout=30)
+                chosen = random.choice(hits[:3])
+                videos = chosen.get("videos", {})
+                vid_info = videos.get("medium") or videos.get("small") or videos.get("large")
+                if vid_info and vid_info.get("url"):
+                    v_data = requests.get(vid_info["url"], timeout=40).content
                     with open(out_mp4, "wb") as f:
-                        for chunk in r.iter_content(chunk_size=8192):
-                            f.write(chunk)
+                        f.write(v_data)
                     return out_mp4
-        except Exception as e:
-            print(f"Pixabay search warning ({kw}): {e}")
+        except Exception:
+            continue
     return None
 
 
-# ============================================================
-# ৬. SRT সাবটাইটেল তৈরি
-# ============================================================
-def format_srt_time(seconds):
-    hrs = int(seconds // 3600)
-    mins = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    millis = int((seconds - int(seconds)) * 1000)
-    return f"{hrs:02d}:{mins:02d}:{secs:02d},{millis:03d}"
+def build_final_video(
+    screenshot_png: str,
+    screenshot_h: int,
+    voice_wav: str,
+    subtitle_segments: List[Dict],
+    stock_clip: Optional[str],
+    output_mp4: str,
+    work_dir: str,
+):
+    # ভয়েসওভারের মোট দৈর্ঘ্য
+    probe = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            voice_wav,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    duration = float(probe.stdout.strip()) + 0.8
 
+    top_banner_png = os.path.join(work_dir, "top_banner.png")
+    cta_banner_png = os.path.join(work_dir, "cta_banner.png")
+    create_top_banner_png(top_banner_png)
+    create_cta_banner_png(cta_banner_png)
 
-def generate_srt(timings, srt_path):
-    idx = 1
-    with open(srt_path, "w", encoding="utf-8") as f:
-        for item in timings:
-            text = item["text"]
-            start = item["start"]
-            end = item["end"]
-            words = text.split()
-            chunks = [" ".join(words[i:i + 7]) for i in range(0, len(words), 7)]
-            if not chunks:
-                continue
-            chunk_dur = (end - start) / len(chunks)
-            for c_i, chunk in enumerate(chunks):
-                c_start = start + c_i * chunk_dur
-                c_end = start + (c_i + 1) * chunk_dur
-                wrapped = "\n".join(textwrap.wrap(chunk, width=32))
-                f.write(f"{idx}\n")
-                f.write(f"{format_srt_time(c_start)} --> {format_srt_time(c_end)}\n")
-                f.write(f"{wrapped}\n\n")
-                idx += 1
+    # সাবটাইটেল PNG গুলো তৈরি করা
+    sub_pngs = []
+    for idx, seg in enumerate(subtitle_segments):
+        sp = os.path.join(work_dir, f"sub_{idx}.png")
+        create_subtitle_png(seg["text"], sp)
+        sub_pngs.append((sp, seg["start"], seg["end"]))
 
-
-# ============================================================
-# ৭. চূড়ান্ত ভিডিও রেন্ডারিং (ধীর স্ক্রোলিং + মোশন গ্রাফিক্স + প্রোগ্রেস বার)
-# ============================================================
-def render_final_video(work_dir, screenshot_png, stock_mp4, voice_wav, srt_path,
-                       total_duration, shorts_title, out_mp4):
-    raw_img = Image.open(screenshot_png).convert("RGB")
-    scale_ratio = VIDEO_WIDTH / raw_img.width
-    new_h = int(raw_img.height * scale_ratio)
-    resized_img = raw_img.resize((VIDEO_WIDTH, new_h), Image.Resampling.LANCZOS)
-
-    effective_h = min(new_h, VIDEO_HEIGHT + MAX_SCROLL_PX)
-    if effective_h < VIDEO_HEIGHT + 400:
-        padded = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT + 500), (15, 23, 42))
-        padded.paste(resized_img, (0, 0))
-        resized_img = padded
-        effective_h = VIDEO_HEIGHT + 500
-    else:
-        resized_img = resized_img.crop((0, 0, VIDEO_WIDTH, effective_h))
-
-    prepared_bg = work_dir / "bg_scroll.png"
-    resized_img.save(prepared_bg, "PNG")
-
-    top_banner_png = work_dir / "top_banner.png"
-    title_card_png = work_dir / "title_card.png"
-    cta_card_png = work_dir / "cta_card.png"
-
-    create_banner_png(top_banner_png, TOP_BADGE_TEXT, width=940, height=84, font_size=32)
-    create_title_card_png(title_card_png, shorts_title, width=960, height=220)
-    create_cta_card_png(cta_card_png, width=980, height=220)
-
-    scroll_distance = max(0, effective_h - VIDEO_HEIGHT)
-    cta_start = max(0.0, total_duration - 5.5)
-
+    # FFmpeg ইনপুট ও ফিল্টার গ্রাফ তৈরি
     inputs = [
-        "-loop", "1", "-t", f"{total_duration:.2f}", "-i", str(prepared_bg),
-        "-i", str(voice_wav),
-        "-loop", "1", "-t", f"{total_duration:.2f}", "-i", str(top_banner_png),
-        "-loop", "1", "-t", f"{total_duration:.2f}", "-i", str(title_card_png),
-        "-loop", "1", "-t", f"{total_duration:.2f}", "-i", str(cta_card_png),
+        "-loop", "1", "-t", f"{duration:.2f}", "-i", screenshot_png,  # [0] স্ক্রলিং সাইট ব্যাকগ্রাউন্ড
+        "-i", voice_wav,                                              # [1] ভয়েসওভার অডিও
+        "-i", top_banner_png,                                         # [2] উপরের প্রমোশন ব্যানার
+        "-i", cta_banner_png,                                         # [3] শেষের CTA ব্যানার
     ]
 
-    next_idx = 5
-    has_stock = stock_mp4 is not None and stock_mp4.exists()
-    if has_stock:
-        inputs.extend(["-stream_loop", "-1", "-t", f"{total_duration:.2f}", "-i", str(stock_mp4)])
-        stock_idx = next_idx
-        next_idx += 1
-
-    has_logo = LOGO_FILE.exists()
-    if has_logo:
-        inputs.extend(["-loop", "1", "-t", f"{total_duration:.2f}", "-i", str(LOGO_FILE)])
-        logo_idx = next_idx
-        next_idx += 1
-
-    has_bgm = BGM_FILE.exists()
-    if has_bgm:
-        inputs.extend(["-stream_loop", "-1", "-t", f"{total_duration:.2f}", "-i", str(BGM_FILE)])
+    next_idx = 4
+    bgm_idx = None
+    if os.path.exists(BGM_FILE):
+        inputs.extend(["-stream_loop", "-1", "-t", f"{duration:.2f}", "-i", BGM_FILE])
         bgm_idx = next_idx
         next_idx += 1
 
-    filters = []
-    filters.append(
-        f"[0:v]crop={VIDEO_WIDTH}:{VIDEO_HEIGHT}:0:'{scroll_distance}*(t/{total_duration:.2f})',"
-        f"eq=brightness=-0.06:contrast=1.04[bg]"
-    )
-    current_v = "[bg]"
+    logo_idx = None
+    if os.path.exists(LOGO_FILE):
+        inputs.extend(["-i", LOGO_FILE])
+        logo_idx = next_idx
+        next_idx += 1
 
-    if has_stock:
-        filters.append(
-            f"[{stock_idx}:v]scale=660:370:force_original_aspect_ratio=increase,"
-            f"crop=660:370,pad=672:382:6:6:color=#38bdf8[stock_box]"
+    stock_idx = None
+    if stock_clip and os.path.exists(stock_clip):
+        inputs.extend(["-stream_loop", "-1", "-t", f"{duration:.2f}", "-i", stock_clip])
+        stock_idx = next_idx
+        next_idx += 1
+
+    sub_start_idx = next_idx
+    for sp, _, _ in sub_pngs:
+        inputs.extend(["-i", sp])
+
+    scroll_dist = max(0, screenshot_h - VIDEO_HEIGHT)
+    filter_parts = []
+
+    # [0] ব্যাকগ্রাউন্ড ওয়েবসাইট ধীরগতির স্মুথ স্ক্রোলিং + হালকা কন্ট্রাস্ট টিউনিং
+    filter_parts.append(
+        f"[0:v]crop={VIDEO_WIDTH}:{VIDEO_HEIGHT}:0:'min({scroll_dist}, {scroll_dist}*(t/{duration:.2f}))',"
+        f"eq=brightness=-0.04:contrast=1.04[bg]"
+    )
+    last_v = "bg"
+
+    # মাঝখানে ছোট রাউন্ডেড স্টক ভিডিও কার্ড (যদি পাওয়া যায়)
+    if stock_idx is not None:
+        filter_parts.append(
+            f"[{stock_idx}:v]scale=640:360:force_original_aspect_ratio=increase,"
+            f"crop=640:360,pad=652:372:6:6:color=white@0.85[card]"
         )
-        filters.append(
-            f"{current_v}[stock_box]overlay=(W-w)/2:1020:"
-            f"enable='between(t,3.0,{max(3.5, cta_start - 0.5):.2f})'[v_stock]"
+        filter_parts.append(
+            f"[{last_v}][card]overlay=(W-w)/2:880:enable='between(t,2.5,{max(3.0, duration - 5.5):.2f})'[v_card]"
         )
-        current_v = "[v_stock]"
+        last_v = "v_card"
 
-    filters.append(f"{current_v}[2:v]overlay=(W-w)/2:42[v_top]")
-    current_v = "[v_top]"
+    # উপরের প্রমোশন ব্যানার
+    filter_parts.append(f"[{last_v}][2:v]overlay=(W-w)/2:55[v_top]")
+    last_v = "v_top"
 
-    if has_logo:
-        filters.append(f"[{logo_idx}:v]scale=96:96[logo_s]")
-        filters.append(f"{current_v}[logo_s]overlay=W-w-36:145[v_logo]")
-        current_v = "[v_logo]"
+    # লোগো ওয়াটারমার্ক (উপরে ডান কোণায়)
+    if logo_idx is not None:
+        filter_parts.append(f"[{logo_idx}:v]scale=110:-1[logo_s]")
+        filter_parts.append(f"[{last_v}][logo_s]overlay=W-w-35:175[v_logo]")
+        last_v = "v_logo"
 
-    filters.append(
-        f"{current_v}[3:v]overlay=(W-w)/2:'if(lt(t,0.8), 160+(1-(t/0.8))*120, 160)':"
-        f"enable='between(t,0.2,4.5)'[v_title]"
+    # অ্যানিমেটেড টাইমলাইন প্রোগ্রেস বার (একদম উপরে)
+    filter_parts.append(
+        f"[{last_v}]drawbox=x=0:y=0:w='iw*(t/{duration:.2f})':h=14:color=#10B981@0.95:t=fill[v_prog]"
     )
-    current_v = "[v_title]"
+    last_v = "v_prog"
 
-    filters.append(
-        f"{current_v}[4:v]overlay=(W-w)/2:1060:enable='gte(t,{cta_start:.2f})'[v_cta]"
-    )
-    current_v = "[v_cta]"
+    # সাবটাইটেল PNG ওভারলে (প্রতিটি চাঙ্ক নিজস্ব সময়ে)
+    for i, (_, st, en) in enumerate(sub_pngs):
+        s_in = sub_start_idx + i
+        out_lbl = f"v_sub_{i}"
+        filter_parts.append(
+            f"[{last_v}][{s_in}:v]overlay=(W-w)/2:1330:enable='between(t,{st:.2f},{en:.2f})'[{out_lbl}]"
+        )
+        last_v = out_lbl
 
-    srt_escaped = str(srt_path).replace("\\", "/").replace(":", "\\:")
-    style = (
-        "FontName=Noto Sans Bengali,FontSize=15,PrimaryColour=&H00FFFFFF,"
-        "BackColour=&HC8000000,BorderStyle=4,Outline=1,Shadow=0,"
-        "Alignment=2,MarginV=95,MarginL=35,MarginR=35"
-    )
-    filters.append(f"{current_v}subtitles='{srt_escaped}':force_style='{style}'[v_sub]")
-    current_v = "[v_sub]"
-
-    filters.append(
-        f"color=c=#22c55e:s={VIDEO_WIDTH}x14:d={total_duration:.2f}[pbar]"
-    )
-    filters.append(
-        f"{current_v}[pbar]overlay=x='-W+(W*(t/{total_duration:.2f}))':y=0[v_out]"
+    # শেষ ৫ সেকেন্ডে কল-টু-অ্যাকশন (CTA) ব্যানার
+    cta_start = max(0.0, duration - 5.2)
+    filter_parts.append(
+        f"[{last_v}][3:v]overlay=(W-w)/2:1630:enable='between(t,{cta_start:.2f},{duration:.2f})'[v_final]"
     )
 
-    if has_bgm:
-        filters.append(
+    # অডিও মিক্সিং (ভয়েস + ১৭% ব্যাকগ্রাউন্ড মিউজিক)
+    if bgm_idx is not None:
+        filter_parts.append(
             f"[{bgm_idx}:a]volume={BGM_VOLUME}[bgm_low];"
-            f"[1:a][bgm_low]amix=inputs=2:duration=first:dropout_transition=2[a_out]"
+            f"[1:a][bgm_low]amix=inputs=2:duration=first:dropout_transition=2[a_final]"
         )
-        audio_map = "[a_out]"
     else:
-        audio_map = "1:a"
+        filter_parts.append("[1:a]acopy[a_final]")
+
+    filter_complex = ";".join(filter_parts)
 
     cmd = [
-        "ffmpeg", "-y",
+        "ffmpeg",
+        "-y",
         *inputs,
-        "-filter_complex", ";".join(filters),
-        "-map", "[v_out]",
-        "-map", audio_map,
-        "-c:v", "libx264", "-preset", "medium", "-crf", "22",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k",
-        "-r", str(FPS),
-        "-t", f"{total_duration:.2f}",
-        str(out_mp4)
+        "-filter_complex",
+        filter_complex,
+        "-map",
+        "[v_final]",
+        "-map",
+        "[a_final]",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "medium",
+        "-crf",
+        "22",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-r",
+        str(FPS),
+        "-t",
+        f"{duration:.2f}",
+        output_mp4,
     ]
-
     subprocess.run(cmd, check=True)
 
 
-# ============================================================
-# ৮. GitHub Releases আপলোড ও Telegram নোটিফিকেশন
-# ============================================================
-def upload_to_github_release(video_path, row_idx, title):
-    if not GITHUB_TOKEN:
-        raise ValueError("GITHUB_TOKEN পাওয়া যায়নি।")
+def upload_to_github_release(video_path: str, row_num: int, title: str) -> Tuple[str, str]:
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError("GITHUB_TOKEN পাওয়া যায়নি।")
 
     headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28"
-    }
-    tag_name = f"short-row-{row_idx}-{int(time.time())}"
-    release_payload = {
-        "tag_name": tag_name,
-        "name": f"Shorts Row {row_idx}: {title[:60]}",
-        "body": f"Auto-generated Bangla YouTube Short for row {row_idx}.",
-        "draft": False,
-        "prerelease": False
+        "X-GitHub-Api-Version": "2022-11-28",
     }
 
+    tag_name = f"shorts-row-{row_num}-{int(time.time())}"
+    release_payload = {
+        "tag_name": tag_name,
+        "name": f"Shorts Row {row_num}: {title[:60]}",
+        "body": "Automated Bangla YouTube Shorts video release.",
+        "draft": False,
+        "prerelease": False,
+    }
     rel_resp = requests.post(
         f"https://api.github.com/repos/{GITHUB_REPO}/releases",
         headers=headers,
         json=release_payload,
-        timeout=30
+        timeout=30,
     )
     rel_resp.raise_for_status()
     rel_data = rel_resp.json()
-    release_id = rel_data["id"]
+    release_id = str(rel_data["id"])
     upload_url = rel_data["upload_url"].split("{")[0]
 
-    file_name = video_path.name
-    upload_headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
-        "Content-Type": "video/mp4"
-    }
+    file_name = os.path.basename(video_path)
     with open(video_path, "rb") as f:
         up_resp = requests.post(
-            f"{upload_url}?name={urllib.parse.quote(file_name)}",
-            headers=upload_headers,
+            f"{upload_url}?name={file_name}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "video/mp4",
+            },
             data=f,
-            timeout=120
+            timeout=120,
         )
     up_resp.raise_for_status()
-    asset_data = up_resp.json()
-    return str(release_id), asset_data["browser_download_url"]
+    download_url = up_resp.json()["browser_download_url"]
+    return release_id, download_url
 
 
-def send_telegram_approval(video_path, row_idx, shorts_title, post_url, download_url):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        raise ValueError("TELEGRAM_BOT_TOKEN বা TELEGRAM_CHAT_ID সেট করা নেই।")
+def send_telegram_for_approval(video_path: str, row_num: int, title: str, post_url: str) -> Tuple[str, str]:
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if not bot_token or not chat_id:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN বা TELEGRAM_CHAT_ID পাওয়া যায়নি।")
 
     caption = (
-        f"🎬 <b>নতুন Bangla Short প্রস্তুত!</b>\n\n"
-        f"📌 <b>শিরোনাম:</b> {shorts_title}\n"
-        f"📊 <b>Sheet Row:</b> {row_idx}\n"
-        f"🔗 <b>Post URL:</b> {post_url}\n"
-        f"⬇️ <b>Download:</b> <a href='{download_url}'>GitHub Release MP4</a>\n\n"
-        f"ভিডিওটি যাচাই করে নিচের বাটনে ক্লিক করুন:"
+        f"🎬 <b>নতুন Bangla Shorts প্রস্তুত!</b>\n\n"
+        f"📌 <b>শিরোনাম:</b> {title}\n"
+        f"🔗 <b>পোস্ট:</b> {post_url}\n"
+        f"📊 <b>Sheet Row:</b> {row_num}"
+    )
+    reply_markup = json.dumps(
+        {
+            "inline_keyboard": [
+                [
+                    {"text": "✅ Approve", "callback_data": f"APPROVE_{row_num}"},
+                    {"text": "❌ Reject", "callback_data": f"REJECT_{row_num}"},
+                ]
+            ]
+        }
     )
 
-    reply_markup = {
-        "inline_keyboard": [[
-            {"text": "✅ Approve", "callback_data": f"APPROVE_{row_idx}"},
-            {"text": "❌ Reject", "callback_data": f"REJECT_{row_idx}"}
-        ]]
-    }
-
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVideo"
     with open(video_path, "rb") as vf:
         resp = requests.post(
-            url,
+            f"https://api.telegram.org/bot{bot_token}/sendVideo",
             data={
-                "chat_id": TELEGRAM_CHAT_ID,
+                "chat_id": chat_id,
                 "caption": caption,
                 "parse_mode": "HTML",
-                "reply_markup": json.dumps(reply_markup)
+                "reply_markup": reply_markup,
             },
-            files={"video": (video_path.name, vf, "video/mp4")},
-            timeout=120
+            files={"video": vf},
+            timeout=120,
         )
-    resp.raise_for_status()
-    result = resp.json()
-    msg = result.get("result", {})
-    video_file_id = msg.get("video", {}).get("file_id", "")
-    message_id = msg.get("message_id", "")
-    return str(video_file_id), str(message_id)
+    res_json = resp.json()
+    if not res_json.get("ok"):
+        raise RuntimeError(f"Telegram sendVideo Error: {res_json}")
+
+    msg = res_json["result"]
+    msg_id = str(msg["message_id"])
+    file_id = str(msg.get("video", {}).get("file_id", ""))
+    return file_id, msg_id
 
 
-# ============================================================
-# ৯. মেইন এক্সিকিউশন ফ্লো
-# ============================================================
 def main():
     sheet = get_google_sheet()
-    header_map = get_header_map(sheet)
+    headers = [str(h).strip() for h in sheet.row_values(1)]
+    col_map = {h: idx + 1 for idx, h in enumerate(headers)}
+
     all_rows = sheet.get_all_values()
+    target_row = None
+    row_data = None
 
-    target_row_idx = None
-    target_row_data = None
+    for r_idx in range(2, len(all_rows) + 1):
+        row = all_rows[r_idx - 1]
+        status_val = row[col_map["Status"] - 1].strip() if len(row) >= col_map["Status"] else ""
+        if status_val == "SCRIPT_READY":
+            target_row = r_idx
+            row_data = row
+            break
 
-    for idx in range(2, len(all_rows) + 1):
-        row = all_rows[idx - 1]
-        status_col = header_map.get("Status", 0) - 1
-        if status_col >= 0 and status_col < len(row):
-            if row[status_col].strip() == "SCRIPT_READY":
-                target_row_idx = idx
-                target_row_data = row
-                break
-
-    if not target_row_idx:
-        print("কোনো SCRIPT_READY রো পাওয়া যায়নি।")
+    if not target_row:
+        print("SCRIPT_READY স্ট্যাটাসযুক্ত কোনো রো পাওয়া যায়নি।")
         return
 
-    def get_col(name, default=""):
-        col_i = header_map.get(name, 0) - 1
-        if 0 <= col_i < len(target_row_data):
-            return target_row_data[col_i].strip()
-        return default
-
-    shorts_title = get_col("Shorts Title (YT)") or get_col("Post Title") or "গুরুত্বপূর্ণ তথ্য"
-    raw_script = get_col("Bangla Voiceover Script")
-    keywords = get_col("Image Search Keywords (English)")
-    post_url = get_col("Post URL")
-
-    if not raw_script:
-        update_row_cells(sheet, target_row_idx, header_map, {
-            "Status": "ERROR",
-            "Last Error": "Bangla Voiceover Script খালি রয়েছে।"
-        })
-        return
-
-    print(f"Processing Row {target_row_idx}: {shorts_title}")
-    update_row_cells(sheet, target_row_idx, header_map, {
-        "Status": "PROCESSING",
-        "Video Status": "GENERATING"
-    })
-
-    if WORK_DIR.exists():
-        shutil.rmtree(WORK_DIR)
-    WORK_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"Processing Row {target_row}...")
+    sheet.update_cell(target_row, col_map["Status"], "PROCESSING")
+    sheet.update_cell(target_row, col_map["Video Status"], "GENERATING")
 
     try:
-        clean_script = clean_script_for_tts(raw_script)
-        sentences = split_sentences(clean_script)
-        voice_wav, timings, total_duration = asyncio.run(
-            synthesize_expressive_voice(sentences, WORK_DIR)
+        yt_title = row_data[col_map["Shorts Title (YT)"] - 1].strip()
+        script = row_data[col_map["Bangla Voiceover Script"] - 1].strip()
+        keywords = row_data[col_map["Image Search Keywords (English)"] - 1].strip()
+        post_url = (
+            row_data[col_map["Post URL"] - 1].strip()
+            if "Post URL" in col_map and len(row_data) >= col_map["Post URL"]
+            else "https://www.homebdinfo.com"
         )
 
-        srt_path = WORK_DIR / "subtitles.srt"
-        generate_srt(timings, srt_path)
+        if not script:
+            raise ValueError("Bangla Voiceover Script খালি রয়েছে।")
 
-        screenshot_png = WORK_DIR / "site_mobile.png"
-        capture_mobile_screenshot(post_url, screenshot_png)
-        stock_mp4 = download_pixabay_clip(keywords, WORK_DIR)
+        with tempfile.TemporaryDirectory() as work_dir:
+            screenshot_png = os.path.join(work_dir, "site_mobile.png")
+            stock_mp4 = os.path.join(work_dir, "stock.mp4")
+            final_mp4 = os.path.join(work_dir, f"bangla_short_row_{target_row}.mp4")
 
-        final_mp4 = WORK_DIR / f"bangla_short_row_{target_row_idx}.mp4"
-        render_final_video(
-            WORK_DIR, screenshot_png, stock_mp4, voice_wav, srt_path,
-            total_duration, shorts_title, final_mp4
-        )
+            print("1. Capturing mobile website screenshot...")
+            sc_height = capture_mobile_site_screenshot(post_url, screenshot_png)
 
-        release_id, download_url = upload_to_github_release(
-            final_mp4, target_row_idx, shorts_title
-        )
+            print("2. Generating natural male voiceover...")
+            voice_wav, subtitle_segments = generate_natural_voiceover(script, work_dir)
 
-        tg_file_id, tg_msg_id = send_telegram_approval(
-            final_mp4, target_row_idx, shorts_title, post_url, download_url
-        )
+            print("3. Fetching stock video clip...")
+            downloaded_clip = download_pixabay_clip(keywords, stock_mp4)
 
-        update_row_cells(sheet, target_row_idx, header_map, {
-            "Status": "PENDING_APPROVAL",
-            "Video Status": "COMPLETED",
-            "Drive File ID": release_id,
-            "Drive File URL": download_url,
-            "Telegram Video File ID": tg_file_id,
-            "Telegram Message ID": tg_msg_id,
-            "Last Error": ""
-        })
-        print(f"Row {target_row_idx} সফলভাবে সম্পন্ন হয়েছে!")
+            print("4. Rendering final promotional video...")
+            build_final_video(
+                screenshot_png=screenshot_png,
+                screenshot_h=sc_height,
+                voice_wav=voice_wav,
+                subtitle_segments=subtitle_segments,
+                stock_clip=downloaded_clip,
+                output_mp4=final_mp4,
+                work_dir=work_dir,
+            )
+
+            print("5. Uploading to GitHub Releases...")
+            rel_id, rel_url = upload_to_github_release(final_mp4, target_row, yt_title)
+
+            print("6. Sending to Telegram for approval...")
+            tg_file_id, tg_msg_id = send_telegram_for_approval(final_mp4, target_row, yt_title, post_url)
+
+            sheet.update_cell(target_row, col_map["Drive File ID"], rel_id)
+            sheet.update_cell(target_row, col_map["Drive File URL"], rel_url)
+            sheet.update_cell(target_row, col_map["Telegram Video File ID"], tg_file_id)
+            sheet.update_cell(target_row, col_map["Telegram Message ID"], tg_msg_id)
+            sheet.update_cell(target_row, col_map["Video Status"], "COMPLETED")
+            sheet.update_cell(target_row, col_map["Status"], "PENDING_APPROVAL")
+            sheet.update_cell(target_row, col_map["Last Error"], "")
+            print(f"Row {target_row} completed successfully!")
 
     except Exception as e:
-        err_msg = str(e)[:1000]
-        print(f"Error processing row {target_row_idx}: {err_msg}")
-        update_row_cells(sheet, target_row_idx, header_map, {
-            "Status": "ERROR",
-            "Video Status": "FAILED",
-            "Last Error": err_msg
-        })
+        err_msg = str(e)[:900]
+        print(f"Error on Row {target_row}: {err_msg}")
+        sheet.update_cell(target_row, col_map["Status"], "ERROR")
+        sheet.update_cell(target_row, col_map["Video Status"], "FAILED")
+        sheet.update_cell(target_row, col_map["Last Error"], err_msg)
         raise
 
 
