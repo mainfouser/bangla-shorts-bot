@@ -208,26 +208,50 @@ def upload_to_facebook_reels(video_path, seo_meta, post_url):
     fb_url = f"https://www.facebook.com/reel/{video_id}"
     print(f"Facebook Reels আপলোড সফল: {fb_url}")
 
-    # ৪. অ্যালগরিদম-বান্ধব Auto First Comment (আর্টিকেল লিংক সহ)
+    # ৪. অ্যালগরিদম-বান্ধব Auto First Comment (ভিডিও প্রসেসিং শেষ হওয়া পর্যন্ত অপেক্ষা করে)
     if post_url:
-        time.sleep(3)
-        try:
-            comment_url = f"https://graph.facebook.com/v21.0/{video_id}/comments"
-            comment_msg = f"বিস্তারিত গাইড ও সরাসরি আবেদন লিংক এখানে দেখুন 👉 {post_url}"
-            c_res = requests.post(
-                comment_url,
-                data={
-                    "message": comment_msg,
-                    "access_token": FB_PAGE_ACCESS_TOKEN
-                },
-                timeout=30
-            )
-            if c_res.status_code == 200:
-                print("Facebook First Comment সফলভাবে যুক্ত হয়েছে।")
-            else:
-                print(f"First comment সতর্কতা: {c_res.text}")
-        except Exception as ce:
-            print(f"First comment যোগ করতে সমস্যা: {ce}")
+        print("ফেসবুক রিলস প্রসেসিং শেষ হওয়ার জন্য অপেক্ষা করা হচ্ছে...")
+        is_ready = False
+        for attempt in range(12):  # সর্বোচ্চ ৬০ সেকেন্ড (১২ x ৫ সেকেন্ড) অপেক্ষা করবে
+            time.sleep(5)
+            try:
+                status_res = requests.get(
+                    f"https://graph.facebook.com/v21.0/{video_id}",
+                    params={
+                        "fields": "status",
+                        "access_token": FB_PAGE_ACCESS_TOKEN
+                    },
+                    timeout=20
+                )
+                if status_res.status_code == 200:
+                    v_status = status_res.json().get("status", {}).get("video_status")
+                    print(f"চেক {attempt + 1}: ভিডিও স্ট্যাটাস = {v_status}")
+                    if v_status == "ready":
+                        is_ready = True
+                        break
+            except Exception as se:
+                print(f"স্ট্যাটাস চেক সতর্কতা: {se}")
+
+        if is_ready:
+            try:
+                comment_url = f"https://graph.facebook.com/v21.0/{video_id}/comments"
+                comment_msg = f"বিস্তারিত গাইড ও সরাসরি আবেদন লিংক এখানে দেখুন 👉 {post_url}"
+                c_res = requests.post(
+                    comment_url,
+                    data={
+                        "message": comment_msg,
+                        "access_token": FB_PAGE_ACCESS_TOKEN
+                    },
+                    timeout=30
+                )
+                if c_res.status_code == 200:
+                    print("Facebook First Comment সফলভাবে যুক্ত হয়েছে।")
+                else:
+                    print(f"First comment সতর্কতা: {c_res.text}")
+            except Exception as ce:
+                print(f"First comment যোগ করতে সমস্যা: {ce}")
+        else:
+            print("ভিডিও প্রসেসিংয়ে বেশি সময় লাগায় কমেন্ট করা সম্ভব হয়নি।")
 
     return str(video_id), fb_url
 
