@@ -1,46 +1,38 @@
-name: Auto Generate Bangla Shorts
+name: Generate Bangla YouTube Shorts
 
 on:
   schedule:
-    - cron: '0 3 * * *'
-    - cron: '0 14 * * *'
-
+    # প্রতি ২ ঘণ্টা পরপর স্বয়ংক্রিয়ভাবে চলবে
+    - cron: "0 */2 * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
 
-concurrency:
-  group: shorts-video-generator
-  cancel-in-progress: false
-
 jobs:
-  build-video:
+  build-shorts:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-          cache: 'pip'
-          cache-dependency-path: requirements.txt
+          python-version: "3.11"
 
-      - name: Install FFmpeg
+      - name: Install System Dependencies (FFmpeg & Bangla Fonts)
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg fonts-noto-core fonts-noto-extra
 
       - name: Install Python Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install gspread google-auth edge-tts moviepy Pillow requests numpy
 
-      - name: Generate Shorts from Google Sheet
+      - name: Run Bangla Shorts Generator
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
@@ -48,5 +40,6 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PYTHONUNBUFFERED: "1"
-        run: python make_shorts.py
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python make_shorts.py
