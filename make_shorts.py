@@ -183,7 +183,7 @@ def build_subtitle_chunks(script_text: str, word_boundaries: list, total_duratio
         return chunks
 
     # Fallback: যদি WordBoundary ইভেন্ট না আসে তবে বাক্য অনুযায়ী সময় ভাগ করা হবে
-    raw_parts = [p.strip() for p in re.split(r"(?<=[।!?\.])\s+|
+    raw_parts = [p.strip() for p in re.split(r"(?<=[।!?\.])\s+|\n+", script) if p.strip()]
 +", script_text) if p.strip()]
     if not raw_parts:
         raw_parts = [script_text.strip()]
