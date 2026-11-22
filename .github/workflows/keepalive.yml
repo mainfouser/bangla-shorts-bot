@@ -1,0 +1,25 @@
+name: Keep Repository Active
+
+on:
+  schedule:
+    - cron: '0 0 */50 * *' # প্রতি ৫০ দিন পরপর রান হবে
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update timestamp and commit
+        run: |
+          date > .keepalive
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@://github.com"
+          git add .keepalive
+          git commit -m "Keep repository active" || exit 0
+          git push
