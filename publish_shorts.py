@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import time
 import requests
@@ -123,6 +124,61 @@ def download_video(video_url, output_path="temp_publish.mp4"):
     return output_path
 
 
+def download_thumbnail_from_release(video_url, row_num, output_path="temp_thumb.jpg"):
+    """GitHub Release থেকে একই রো-এর থাম্বনেইল ইমেজ (.jpg) ডাউনলোড করে"""
+    if not video_url:
+        return None
+
+    thumb_url = re.sub(r"bangla_short_row_\d+\.mp4$", f"thumb_row_{row_num}.jpg", video_url)
+    if thumb_url == video_url:
+        base_url = video_url.rsplit("/", 1)[0]
+        thumb_url = f"{base_url}/thumb_row_{row_num}.jpg"
+
+    try:
+        res = requests.get(thumb_url, timeout=45)
+        if res.status_code == 200 and len(res.content) > 1024:
+            with open(output_path, "wb") as f:
+                f.write(res.content)
+            print(f"থাম্বনেইল ডাউনলোড সফল: {thumb_url}")
+            return output_path
+        else:
+            print(f"রিলিজে থাম্বনেইল পাওয়া যায়নি (HTTP {res.status_code})")
+    except Exception as e:
+        print(f"থাম্বনেইল ডাউনলোড সতর্কতা: {e}")
+
+    return None
+
+
+def set_facebook_reel_thumbnail(video_id, thumb_path):
+    """Facebook Reels-এর কভার ফটো হিসেবে থাম্বনেইল আপলোড করে"""
+    if not thumb_path or not os.path.exists(thumb_path):
+        return False
+
+    thumb_endpoint = f"https://graph.facebook.com/v21.0/{video_id}/thumbnails"
+    try:
+        with open(thumb_path, "rb") as tf:
+            res = requests.post(
+                thumb_endpoint,
+                data={
+                    "access_token": FB_PAGE_ACCESS_TOKEN,
+                    "is_preferred": "true"
+                },
+                files={
+                    "source": ("thumbnail.jpg", tf, "image/jpeg")
+                },
+                timeout=60
+            )
+        if res.status_code == 200:
+            print("Facebook Reels থাম্বনেইল সফলভাবে সেট হয়েছে।")
+            return True
+        else:
+            print(f"Facebook থাম্বনেইল আপলোড সতর্কতা: {res.text}")
+    except Exception as e:
+        print(f"Facebook থাম্বনেইল সেট করতে সমস্যা: {e}")
+
+    return False
+
+
 def upload_to_youtube(video_path, seo_meta):
     if not YOUTUBE_OAUTH_TOKEN:
         raise ValueError("YOUTUBE_OAUTH_TOKEN পাওয়া যায়নি।")
@@ -160,7 +216,7 @@ def upload_to_youtube(video_path, seo_meta):
     return yt_video_id, yt_url
 
 
-def upload_to_facebook_reels(video_path, seo_meta, post_url):
+def upload_to_facebook_reels(video_path, seo_meta, post_url, thumb_path=None):
     if not FB_PAGE_ID or not FB_PAGE_ACCESS_TOKEN:
         raise ValueError("FB_PAGE_ID বা FB_PAGE_ACCESS_TOKEN পাওয়া যায়নি।")
 
@@ -208,7 +264,7 @@ def upload_to_facebook_reels(video_path, seo_meta, post_url):
     fb_url = f"https://www.facebook.com/reel/{video_id}"
     print(f"Facebook Reels আপলোড সফল: {fb_url}")
 
-    if post_url:
+    if post_url or thumb_path:
         print("ফেসবুক রিলস প্রসেসিং শেষ হওয়ার জন্য অপেক্ষা করা হচ্ছে...")
         is_ready = False
         for attempt in range(12):
@@ -232,25 +288,29 @@ def upload_to_facebook_reels(video_path, seo_meta, post_url):
                 print(f"স্ট্যাটাস চেক সতর্কতা: {se}")
 
         if is_ready:
-            try:
-                comment_url = f"https://graph.facebook.com/v21.0/{video_id}/comments"
-                comment_msg = f"বিস্তারিত গাইড ও সরাসরি আবেদন লিংক এখানে দেখুন 👉 {post_url}"
-                c_res = requests.post(
-                    comment_url,
-                    data={
-                        "message": comment_msg,
-                        "access_token": FB_PAGE_ACCESS_TOKEN
-                    },
-                    timeout=30
-                )
-                if c_res.status_code == 200:
-                    print("Facebook First Comment সফলভাবে যুক্ত হয়েছে।")
-                else:
-                    print(f"First comment সতর্কতা: {c_res.text}")
-            except Exception as ce:
-                print(f"First comment যোগ করতে সমস্যা: {ce}")
+            if thumb_path:
+                set_facebook_reel_thumbnail(video_id, thumb_path)
+
+            if post_url:
+                try:
+                    comment_url = f"https://graph.facebook.com/v21.0/{video_id}/comments"
+                    comment_msg = f"বিস্তারিত গাইড ও সরাসরি আবেদন লিংক এখানে দেখুন 👉 {post_url}"
+                    c_res = requests.post(
+                        comment_url,
+                        data={
+                            "message": comment_msg,
+                            "access_token": FB_PAGE_ACCESS_TOKEN
+                        },
+                        timeout=30
+                    )
+                    if c_res.status_code == 200:
+                        print("Facebook First Comment সফলভাবে যুক্ত হয়েছে।")
+                    else:
+                        print(f"First comment সতর্কতা: {c_res.text}")
+                except Exception as ce:
+                    print(f"First comment যোগ করতে সমস্যা: {ce}")
         else:
-            print("ভিডিও প্রসেসিংয়ে বেশি সময় লাগায় কমেন্ট করা সম্ভব হয়নি।")
+            print("ভিডিও প্রসেসিংয়ে বেশি সময় লাগায় থাম্বনেইল/কমেন্ট করা সম্ভব হয়নি।")
 
     return str(video_id), fb_url
 
@@ -340,39 +400,52 @@ def process_approved_row(sheet, row_num, row_data, header_map):
     print(f"পাবলিশিং শুরু হচ্ছে: Row {row_num} - {raw_title}")
     update_cells(sheet, row_num, header_map, {"Status": "PUBLISHING"})
 
-    video_path = download_video(video_url, "temp_publish.mp4")
-    seo_meta = generate_seo_metadata(raw_title, script_text, post_url)
+    video_path = "temp_publish.mp4"
+    thumb_path = None
 
-    yt_id, yt_url = upload_to_youtube(video_path, seo_meta)
-    yt_time_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    try:
+        download_video(video_url, video_path)
+        thumb_path = download_thumbnail_from_release(video_url, row_num, "temp_thumb.jpg")
+        seo_meta = generate_seo_metadata(raw_title, script_text, post_url)
 
-    fb_id, fb_url = upload_to_facebook_reels(video_path, seo_meta, post_url)
-    fb_time_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        yt_id, yt_url = upload_to_youtube(video_path, seo_meta)
+        yt_time_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    deleted = delete_github_release(release_id)
+        fb_id, fb_url = upload_to_facebook_reels(video_path, seo_meta, post_url, thumb_path)
+        fb_time_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
-    update_cells(sheet, row_num, header_map, {
-        "Status": "PUBLISHED",
-        "YouTube Status": "PUBLISHED",
-        "YouTube Video ID": yt_id,
-        "YouTube URL": yt_url,
-        "YouTube Published At": yt_time_str,
-        "Facebook Status": "PUBLISHED",
-        "Facebook Video ID": fb_id,
-        "Facebook URL": fb_url,
-        "Facebook Published At": fb_time_str,
-        "Cleanup Status": "DELETED" if deleted else "PENDING",
-        "Last Error": ""
-    })
+        deleted = delete_github_release(release_id)
 
-    send_telegram_notice(
-        f"✅ <b>ভিডিও সফলভাবে পাবলিশ হয়েছে!</b>\n\n"
-        f"📌 <b>Title:</b> {seo_meta['yt_title']}\n"
-        f"▶️ <b>YouTube:</b> {yt_url}\n"
-        f"📘 <b>Facebook Reels:</b> {fb_url}\n"
-        f"🗑️ <b>Temp Storage:</b> {'Cleaned' if deleted else 'Pending'}"
-    )
-    print(f"Row {row_num} সম্পূর্ণভাবে পাবলিশ ও ক্লিনআপ হয়েছে!")
+        update_cells(sheet, row_num, header_map, {
+            "Status": "PUBLISHED",
+            "YouTube Status": "PUBLISHED",
+            "YouTube Video ID": yt_id,
+            "YouTube URL": yt_url,
+            "YouTube Published At": yt_time_str,
+            "Facebook Status": "PUBLISHED",
+            "Facebook Video ID": fb_id,
+            "Facebook URL": fb_url,
+            "Facebook Published At": fb_time_str,
+            "Cleanup Status": "DELETED" if deleted else "PENDING",
+            "Last Error": ""
+        })
+
+        send_telegram_notice(
+            f"✅ <b>ভিডিও সফলভাবে পাবলিশ হয়েছে!</b>\n\n"
+            f"📌 <b>Title:</b> {seo_meta['yt_title']}\n"
+            f"▶️ <b>YouTube:</b> {yt_url}\n"
+            f"📘 <b>Facebook Reels:</b> {fb_url}\n"
+            f"🗑️ <b>Temp Storage:</b> {'Cleaned' if deleted else 'Pending'}"
+        )
+        print(f"Row {row_num} সম্পূর্ণভাবে পাবলিশ ও ক্লিনআপ হয়েছে!")
+
+    finally:
+        for tmp_f in (video_path, thumb_path):
+            if tmp_f and os.path.exists(tmp_f):
+                try:
+                    os.remove(tmp_f)
+                except Exception:
+                    pass
 
 
 def main():
