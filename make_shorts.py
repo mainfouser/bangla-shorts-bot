@@ -18,9 +18,9 @@ from PIL import Image, ImageDraw, ImageFont
 from playwright.sync_api import sync_playwright
 
 # ============================================================
-# ভয়েস কনফিগারেশন (স্মার্ট ও ন্যাচারাল পুরুষ কণ্ঠ)
+# ভয়েস কনফিগারেশন (স্মার্ট ও ন্যাচারাল পুরুষ কণ্ঠ) "bn-BD-PradeepNeural" bn-IN-BashkarNeural
 # ============================================================
-VOICE_NAME = "bn-IN-BashkarNeural"
+VOICE_NAME = "bn-BD-PradeepNeural"
 
 # গিটহাব ও ফাইল কনফিগারেশন
 GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "mainfouser/bangla-shorts-bot")
