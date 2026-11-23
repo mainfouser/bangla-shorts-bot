@@ -18,7 +18,7 @@ from PIL import Image, ImageDraw, ImageFont
 from playwright.sync_api import sync_playwright
 
 # ============================================================
-# ভয়েস কনফিগারেশন (স্মার্ট ও ন্যাচারাল পুরুষ কণ্ঠ) "bn-BD-PradeepNeural" bn-IN-BashkarNeural
+# ভয়েস কনফিগারেশন (স্মার্ট ও ন্যাচারাল পুরুষ কণ্ঠ)
 # ============================================================
 VOICE_NAME = "bn-BD-PradeepNeural"
 
@@ -35,6 +35,7 @@ VIDEO_HEIGHT = 1920
 FPS = 30
 MAX_SCROLL_PX = 2600
 HOOK_DURATION = 3.5  # প্রথম ৩.৫ সেকেন্ড ফুল-স্ক্রিন হুক ক্লিপ
+COVER_DURATION = 0.4 # ইউটিউব শর্টসের শুরুতে ০.৪ সেকেন্ডের থাম্বনেইল কভার ফ্রেম
 
 # ফন্ট পাথ (Ubuntu / GitHub Actions)
 BENGALI_FONT_PATHS = [
@@ -282,6 +283,147 @@ def wrap_text_by_pixel(
     return lines
 
 
+def create_thumbnail_jpg(
+    title: str,
+    screenshot_png: str,
+    stock_clip: Optional[str],
+    out_jpg: str,
+    work_dir: str,
+):
+    """আকর্ষণীয় হুক শিরোনাম, লোগো ও গ্রেডিয়েন্ট ইফেক্টসহ প্রফেশনাল থাম্বনেইল তৈরি"""
+    bg_img = None
+
+    # স্টক ভিডিও ক্লিপ থাকলে তার প্রথম ফ্রেম ব্যাকগ্রাউন্ড হিসেবে নেওয়া
+    if stock_clip and os.path.exists(stock_clip):
+        frame_png = os.path.join(work_dir, "thumb_stock_frame.png")
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", stock_clip, "-ss", "00:00:00.5", "-vframes", "1", frame_png],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if os.path.exists(frame_png):
+                raw = Image.open(frame_png).convert("RGB")
+                scale = max(VIDEO_WIDTH / raw.width, VIDEO_HEIGHT / raw.height)
+                nw, nh = int(raw.width * scale), int(raw.height * scale)
+                raw = raw.resize((nw, nh), Image.Resampling.LANCZOS)
+                left = (nw - VIDEO_WIDTH) // 2
+                top = (nh - VIDEO_HEIGHT) // 2
+                bg_img = raw.crop((left, top, left + VIDEO_WIDTH, top + VIDEO_HEIGHT))
+        except Exception:
+            bg_img = None
+
+    # স্টক ফ্রেম না থাকলে ওয়েবসাইটের স্ক্রিনশট ব্যবহার
+    if bg_img is None:
+        sc = Image.open(screenshot_png).convert("RGB")
+        bg_img = sc.crop((0, 0, VIDEO_WIDTH, min(VIDEO_HEIGHT, sc.height)))
+        if bg_img.height < VIDEO_HEIGHT:
+            padded = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT), (15, 23, 42))
+            padded.paste(bg_img, (0, 0))
+            bg_img = padded
+
+    canvas = bg_img.convert("RGBA")
+
+    # ডার্ক গ্রেডিয়েন্ট ওভারলে ইফেক্ট (যাতে লেখা ঝকঝকে দেখায়)
+    overlay = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (0, 0, 0, 0))
+    ov_draw = ImageDraw.Draw(overlay)
+    for y in range(VIDEO_HEIGHT):
+        ratio = y / VIDEO_HEIGHT
+        if ratio < 0.25:
+            alpha = int(215 - (ratio / 0.25) * 65)
+        elif ratio > 0.65:
+            alpha = int(150 + ((ratio - 0.65) / 0.35) * 85)
+        else:
+            alpha = 155
+        ov_draw.line([(0, y), (VIDEO_WIDTH, y)], fill=(10, 15, 28, alpha))
+
+    canvas = Image.alpha_composite(canvas, overlay)
+    draw = ImageDraw.Draw(canvas)
+
+    # চারপাশে প্রিমিয়াম গোল্ডেন বর্ডার ফ্রেম
+    draw.rectangle([18, 18, VIDEO_WIDTH - 18, VIDEO_HEIGHT - 18], outline=(245, 158, 11, 230), width=8)
+
+    # উপরে ব্র্যান্ড লোগো ও স্লোগান
+    top_y = 95
+    if os.path.exists(LOGO_FILE):
+        try:
+            logo = Image.open(LOGO_FILE).convert("RGBA")
+            lw = 170
+            lh = int(logo.height * (lw / logo.width))
+            logo = logo.resize((lw, lh), Image.Resampling.LANCZOS)
+            canvas.paste(logo, ((VIDEO_WIDTH - lw) // 2, top_y), logo)
+            top_y += lh + 30
+        except Exception:
+            pass
+
+    # হুক ব্যাজ
+    badge_w, badge_h = 440, 68
+    bx0 = (VIDEO_WIDTH - badge_w) // 2
+    draw.rounded_rectangle(
+        [bx0, top_y, bx0 + badge_w, top_y + badge_h],
+        radius=34,
+        fill=(220, 38, 38, 245),
+        outline=(255, 255, 255, 230),
+        width=3,
+    )
+    bn_badge_font = find_font(BENGALI_FONT_PATHS, 34)
+    en_badge_font = find_font(LATIN_FONT_PATHS, 34)
+    badge_txt = "🔥 গুরুত্বপূর্ণ তথ্য ও নিয়ম"
+    btw = measure_mixed_text_width(draw, badge_txt, bn_badge_font, en_badge_font)
+    render_mixed_text_line(draw, (VIDEO_WIDTH - btw) // 2, top_y + 13, badge_txt, bn_badge_font, en_badge_font)
+
+    # মূল হুক শিরোনাম বক্স (মাঝখানে বড় বোল্ড ফন্টে)
+    clean_title = re.sub(r"#\w+", "", title).strip()
+    bn_title_font = find_font(BENGALI_FONT_PATHS, 68)
+    en_title_font = find_font(LATIN_FONT_PATHS, 64)
+
+    lines = wrap_text_by_pixel(draw, clean_title, bn_title_font, en_title_font, 900)
+    if len(lines) > 4:
+        lines = lines[:4]
+        lines[-1] = lines[-1][:22] + "..."
+
+    line_h = 94
+    box_pad_y = 48
+    box_h = len(lines) * line_h + box_pad_y * 2
+    box_y0 = max(top_y + 115, (VIDEO_HEIGHT - box_h) // 2 + 20)
+    box_y1 = box_y0 + box_h
+
+    draw.rounded_rectangle(
+        [45, box_y0, VIDEO_WIDTH - 45, box_y1],
+        radius=36,
+        fill=(15, 23, 42, 225),
+        outline=(245, 158, 11, 245),
+        width=5,
+    )
+
+    for idx, ln in enumerate(lines):
+        lw = measure_mixed_text_width(draw, ln, bn_title_font, en_title_font)
+        lx = (VIDEO_WIDTH - lw) // 2
+        ly = box_y0 + box_pad_y + idx * line_h
+        txt_color = (250, 204, 21, 255) if idx % 2 == 0 else (255, 255, 255, 255)
+        render_mixed_text_line(draw, lx, ly, ln, bn_title_font, en_title_font, fill=txt_color)
+
+    # নিচে ব্র্যান্ড ডোমেইন ব্যাজ
+    dom_w, dom_h = 580, 78
+    dx0 = (VIDEO_WIDTH - dom_w) // 2
+    dy0 = VIDEO_HEIGHT - 210
+    draw.rounded_rectangle(
+        [dx0, dy0, dx0 + dom_w, dy0 + dom_h],
+        radius=38,
+        fill=(16, 185, 129, 245),
+        outline=(255, 255, 255, 240),
+        width=4,
+    )
+    bn_dom = find_font(BENGALI_FONT_PATHS, 36)
+    en_dom = find_font(LATIN_FONT_PATHS, 38)
+    dom_txt = "🌐 homebdinfo.com"
+    dtw = measure_mixed_text_width(draw, dom_txt, bn_dom, en_dom)
+    render_mixed_text_line(draw, (VIDEO_WIDTH - dtw) // 2, dy0 + 17, dom_txt, bn_dom, en_dom)
+
+    canvas.convert("RGB").save(out_jpg, "JPEG", quality=92)
+
+
 def create_subtitle_png(text: str, out_path: str):
     canvas_w = 1000
     canvas_h = 280
@@ -488,6 +630,7 @@ def build_final_video(
     voice_wav: str,
     subtitle_segments: List[Dict],
     stock_clip: Optional[str],
+    thumbnail_jpg: str,
     output_mp4: str,
     work_dir: str,
 ):
@@ -523,14 +666,15 @@ def build_final_video(
 
     # ইনপুট ফাইলসমূহ
     inputs = [
-        "-loop", "1", "-t", f"{duration:.2f}", "-i", screenshot_png,  # [0] স্ক্রলিং সাইট ব্যাকগ্রাউন্ড
-        "-i", voice_wav,                                              # [1] ভয়েসওভার অডিও
-        "-i", slogan_png,                                             # [2] উপরের ব্র্যান্ড স্লোগান
-        "-loop", "1", "-t", f"{duration:.2f}", "-i", domain_png,      # [3] মোশন-অ্যানিমেটেড ডোমেইন পিল
-        "-i", cta_banner_png,                                         # [4] শেষের CTA ব্যানার
+        "-loop", "1", "-t", f"{duration:.2f}", "-i", screenshot_png,   # [0] স্ক্রলিং সাইট ব্যাকগ্রাউন্ড
+        "-i", voice_wav,                                               # [1] ভয়েসওভার অডিও
+        "-i", slogan_png,                                              # [2] উপরের ব্র্যান্ড স্লোগান
+        "-loop", "1", "-t", f"{duration:.2f}", "-i", domain_png,       # [3] মোশন-অ্যানিমেটেড ডোমেইন পিল
+        "-i", cta_banner_png,                                          # [4] শেষের CTA ব্যানার
+        "-loop", "1", "-t", f"{COVER_DURATION:.2f}", "-i", thumbnail_jpg, # [5] শুরুর কভার থাম্বনেইল ফ্রেম
     ]
 
-    next_idx = 5
+    next_idx = 6
     bgm_idx = None
     if os.path.exists(BGM_FILE):
         inputs.extend(["-stream_loop", "-1", "-t", f"{duration:.2f}", "-i", BGM_FILE])
@@ -556,7 +700,7 @@ def build_final_video(
     scroll_dist = max(0, screenshot_h - VIDEO_HEIGHT)
     filter_parts = []
 
-    # [0] ওয়েবসাইট ব্যাকগ্রাউন্ড: স্মুথ স্ক্রোলিং + মাঝে মাঝে ডাইনামিক Ken Burns জুম মোশন
+    # [0] ওয়েবসাইট ব্যাকগ্রাউন্ড: স্মুথ স্ক্রোলিং + Ken Burns জুম মোশন
     site_scroll_dur = max(1.0, duration - HOOK_DURATION) if stock_idx is not None else duration
     scroll_start_t = HOOK_DURATION if stock_idx is not None else 0.0
 
@@ -568,7 +712,7 @@ def build_final_video(
     )
     last_v = "site_bg"
 
-    # প্রথম ৩.৫ সেকেন্ড ফুল-স্ক্রিন হুক ক্লিপ (1080x1920) হালকা জুম-ইন মোশনসহ
+    # প্রথম ৩.৫ সেকেন্ড ফুল-স্ক্রিন হুক ক্লিপ (1080x1920)
     if stock_idx is not None:
         filter_parts.append(
             f"[{stock_idx}:v]scale=1160:2062:force_original_aspect_ratio=increase,"
@@ -582,11 +726,11 @@ def build_final_video(
         )
         last_v = "v_hooked"
 
-    # উপরের ব্র্যান্ড স্লোগান ব্যানার ('সঠিক তথ্য, সহজ জীবন')
+    # উপরের ব্র্যান্ড স্লোগান ব্যানার
     filter_parts.append(f"[{last_v}][2:v]overlay=(W-w)/2:42[v_slogan]")
     last_v = "v_slogan"
 
-    # মোশন-অ্যানিমেটেড ব্র্যান্ড ডোমেইন পিল ('homebdinfo.com') - মৃদু পালস জুম ও ফ্লোটিং মোশন
+    # মোশন-অ্যানিমেটেড ব্র্যান্ড ডোমেইন পিল
     filter_parts.append(
         f"[3:v]scale=w='trunc(520*(1+0.05*sin(2*PI*t/2.8))/2)*2':h='trunc(68*(1+0.05*sin(2*PI*t/2.8))/2)*2':eval=frame[dom_anim]"
     )
@@ -595,19 +739,19 @@ def build_final_video(
     )
     last_v = "v_dom"
 
-    # লোগো ওয়াটারমার্ক (উপরে ডান কোণায়)
+    # লোগো ওয়াটারমার্ক
     if logo_idx is not None:
         filter_parts.append(f"[{logo_idx}:v]scale=105:-1[logo_s]")
         filter_parts.append(f"[{last_v}][logo_s]overlay=W-w-32:205[v_logo]")
         last_v = "v_logo"
 
-    # অ্যানিমেটেড টাইমলাইন প্রোগ্রেস বার (একদম উপরে)
+    # অ্যানিমেটেড টাইমলাইন প্রোগ্রেস বার
     filter_parts.append(
         f"[{last_v}]drawbox=x=0:y=0:w='iw*(t/{duration:.2f})':h=14:color=#10B981@0.95:t=fill[v_prog]"
     )
     last_v = "v_prog"
 
-    # সাবটাইটেল PNG ওভারলে (CTA-এর সাথে ওভারল্যাপ এড়াতে সামান্য উপরে পজিশন করা হয়েছে)
+    # সাবটাইটেল PNG ওভারলে
     for i, (_, st, en) in enumerate(sub_pngs):
         s_in = sub_start_idx + i
         out_lbl = f"v_sub_{i}"
@@ -619,7 +763,14 @@ def build_final_video(
     # শেষ ৫ সেকেন্ডে কল-টু-অ্যাকশন (CTA) ব্যানার
     cta_start = max(0.0, duration - 5.2)
     filter_parts.append(
-        f"[{last_v}][4:v]overlay=(W-w)/2:1635:enable='between(t,{cta_start:.2f},{duration:.2f})'[v_final]"
+        f"[{last_v}][4:v]overlay=(W-w)/2:1635:enable='between(t,{cta_start:.2f},{duration:.2f})'[v_with_cta]"
+    )
+    last_v = "v_with_cta"
+
+    # একদম শুরুতে ০.৪ সেকেন্ডের থাম্বনেইল কভার ফ্রেম ওভারলে (YouTube Shorts থাম্বনেইল হিসেবে ব্যবহারের জন্য)
+    filter_parts.append(
+        f"[5:v]scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}[thumb_cover];"
+        f"[{last_v}][thumb_cover]overlay=0:0:enable='between(t,0,{COVER_DURATION:.2f})'[v_final]"
     )
 
     # অডিও মিক্সিং (ভয়েস + ১৭% ব্যাকগ্রাউন্ড মিউজিক)
@@ -664,7 +815,7 @@ def build_final_video(
     subprocess.run(cmd, check=True)
 
 
-def upload_to_github_release(video_path: str, row_num: int, title: str) -> Tuple[str, str]:
+def upload_to_github_release(video_path: str, thumb_path: str, row_num: int, title: str) -> Tuple[str, str]:
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     if not token:
         raise RuntimeError("GITHUB_TOKEN পাওয়া যায়নি।")
@@ -679,7 +830,7 @@ def upload_to_github_release(video_path: str, row_num: int, title: str) -> Tuple
     release_payload = {
         "tag_name": tag_name,
         "name": f"Shorts Row {row_num}: {title[:60]}",
-        "body": "Automated Bangla YouTube Shorts video release.",
+        "body": "Automated Bangla YouTube Shorts video and thumbnail release.",
         "draft": False,
         "prerelease": False,
     }
@@ -694,6 +845,7 @@ def upload_to_github_release(video_path: str, row_num: int, title: str) -> Tuple
     release_id = str(rel_data["id"])
     upload_url = rel_data["upload_url"].split("{")[0]
 
+    # ১. ভিডিও ফাইল আপলোড
     file_name = os.path.basename(video_path)
     with open(video_path, "rb") as f:
         up_resp = requests.post(
@@ -707,10 +859,26 @@ def upload_to_github_release(video_path: str, row_num: int, title: str) -> Tuple
         )
     up_resp.raise_for_status()
     download_url = up_resp.json()["browser_download_url"]
+
+    # ২. থাম্বনেইল ইমেজ আপলোড (Facebook Reels-এ কভার হিসেবে সেট করার জন্য)
+    if thumb_path and os.path.exists(thumb_path):
+        thumb_name = os.path.basename(thumb_path)
+        with open(thumb_path, "rb") as tf:
+            t_resp = requests.post(
+                f"{upload_url}?name={thumb_name}",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "image/jpeg",
+                },
+                data=tf,
+                timeout=60,
+            )
+        t_resp.raise_for_status()
+
     return release_id, download_url
 
 
-def send_telegram_for_approval(video_path: str, row_num: int, title: str, post_url: str) -> Tuple[str, str]:
+def send_telegram_for_approval(video_path: str, thumb_path: str, row_num: int, title: str, post_url: str) -> Tuple[str, str]:
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
     if not bot_token or not chat_id:
@@ -737,7 +905,11 @@ def send_telegram_for_approval(video_path: str, row_num: int, title: str, post_u
         }
     )
 
-    with open(video_path, "rb") as vf:
+    files = {"video": open(video_path, "rb")}
+    if thumb_path and os.path.exists(thumb_path):
+        files["thumbnail"] = open(thumb_path, "rb")
+
+    try:
         resp = requests.post(
             f"https://api.telegram.org/bot{bot_token}/sendVideo",
             data={
@@ -746,9 +918,13 @@ def send_telegram_for_approval(video_path: str, row_num: int, title: str, post_u
                 "parse_mode": "HTML",
                 "reply_markup": reply_markup,
             },
-            files={"video": vf},
+            files=files,
             timeout=120,
         )
+    finally:
+        for f_obj in files.values():
+            f_obj.close()
+
     res_json = resp.json()
     if not res_json.get("ok"):
         raise RuntimeError(f"Telegram sendVideo Error: {res_json}")
@@ -800,6 +976,7 @@ def main():
         with tempfile.TemporaryDirectory() as work_dir:
             screenshot_png = os.path.join(work_dir, "site_mobile.png")
             stock_mp4 = os.path.join(work_dir, "stock.mp4")
+            thumb_jpg = os.path.join(work_dir, f"thumb_row_{target_row}.jpg")
             final_mp4 = os.path.join(work_dir, f"bangla_short_row_{target_row}.mp4")
 
             print("1. Capturing mobile website screenshot...")
@@ -811,22 +988,26 @@ def main():
             print("3. Fetching stock video clip for 3.5s full-screen hook...")
             downloaded_clip = download_pixabay_clip(keywords, stock_mp4)
 
-            print("4. Rendering final branded promotional video...")
+            print("4. Generating attractive branded thumbnail...")
+            create_thumbnail_jpg(yt_title, screenshot_png, downloaded_clip, thumb_jpg, work_dir)
+
+            print("5. Rendering final branded promotional video...")
             build_final_video(
                 screenshot_png=screenshot_png,
                 screenshot_h=sc_height,
                 voice_wav=voice_wav,
                 subtitle_segments=subtitle_segments,
                 stock_clip=downloaded_clip,
+                thumbnail_jpg=thumb_jpg,
                 output_mp4=final_mp4,
                 work_dir=work_dir,
             )
 
-            print("5. Uploading to GitHub Releases...")
-            rel_id, rel_url = upload_to_github_release(final_mp4, target_row, yt_title)
+            print("6. Uploading video and thumbnail to GitHub Releases...")
+            rel_id, rel_url = upload_to_github_release(final_mp4, thumb_jpg, target_row, yt_title)
 
-            print("6. Sending to Telegram for approval...")
-            tg_file_id, tg_msg_id = send_telegram_for_approval(final_mp4, target_row, yt_title, post_url)
+            print("7. Sending to Telegram for approval...")
+            tg_file_id, tg_msg_id = send_telegram_for_approval(final_mp4, thumb_jpg, target_row, yt_title, post_url)
 
             sheet.update_cell(target_row, col_map["Drive File ID"], rel_id)
             sheet.update_cell(target_row, col_map["Drive File URL"], rel_url)
