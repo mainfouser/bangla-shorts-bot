@@ -331,15 +331,23 @@ def send_telegram_notice(message_text):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    requests.post(
-        url,
-        data={
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": message_text,
-            "parse_mode": "HTML"
-        },
-        timeout=20
-    )
+    for attempt in range(3):
+        try:
+            res = requests.post(
+                url,
+                data={
+                    "chat_id": TELEGRAM_CHAT_ID,
+                    "text": message_text,
+                    "parse_mode": "HTML"
+                },
+                timeout=25
+            )
+            if res.status_code == 200:
+                return
+        except Exception as e:
+            print(f"Telegram notice চেষ্টায় সাময়িক সমস্যা ({attempt + 1}/3): {e}")
+            time.sleep(3)
+    print("Telegram নোটিফিকেশন পাঠানো সম্ভব হয়নি, তবে ভিডিও পাবলিশ সফল হয়েছে।")
 
 
 def check_fb_token_expiry():
@@ -398,6 +406,10 @@ def process_approved_row(sheet, row_num, row_data, header_map):
     video_url = row_data[header_map["Drive File URL"] - 1]
 
     print(f"পাবলিশিং শুরু হচ্ছে: Row {row_num} - {raw_title}")
+
+    if not video_url or not str(video_url).strip().startswith("http"):
+        raise ValueError("Drive File URL খালি বা সঠিক নয়! ভিডিওটি আগে জেনারেট হতে হবে।")
+
     update_cells(sheet, row_num, header_map, {"Status": "PUBLISHING"})
 
     video_path = "temp_publish.mp4"
