@@ -16,6 +16,8 @@ GOOGLE_CREDS_JSON = os.environ.get("GOOGLE_CREDENTIALS")
 YOUTUBE_OAUTH_TOKEN = os.environ.get("YOUTUBE_OAUTH_TOKEN")
 FB_PAGE_ID = os.environ.get("FB_PAGE_ID")
 FB_PAGE_ACCESS_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN")
+FB_APP_ID = os.environ.get("FB_APP_ID")
+FB_APP_SECRET = os.environ.get("FB_APP_SECRET")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -280,6 +282,41 @@ def send_telegram_notice(message_text):
     )
 
 
+def check_fb_token_expiry():
+    if not all([FB_PAGE_ACCESS_TOKEN, FB_APP_ID, FB_APP_SECRET]):
+        return
+
+    app_access_token = f"{FB_APP_ID}|{FB_APP_SECRET}"
+    url = "https://graph.facebook.com/v21.0/debug_token"
+
+    try:
+        res = requests.get(
+            url,
+            params={
+                "input_token": FB_PAGE_ACCESS_TOKEN,
+                "access_token": app_access_token
+            },
+            timeout=15
+        )
+        if res.status_code == 200:
+            data = res.json().get("data", {})
+            data_expires_at = data.get("data_access_expires_at", 0)
+
+            if data_expires_at > 0:
+                days_left = (data_expires_at - int(time.time())) // 86400
+                print(f"Facebook Data Access মেয়াদ বাকি আছে: {days_left} দিন")
+
+                if days_left <= 7:
+                    send_telegram_notice(
+                        f"⚠️ <b>Facebook Token সতর্কতা!</b>\n\n"
+                        f"আপনার Facebook Data Access-এর মেয়াদ আর মাত্র <b>{days_left} দিন</b> বাকি আছে।\n"
+                        f"বট সচল রাখতে নিচের লিংকে গিয়ে অ্যাক্সেস রিনিউ (Renew) করুন:\n"
+                        f"🔗 https://www.facebook.com/settings?tab=business_tools"
+                    )
+    except Exception as e:
+        print(f"Facebook Token মেয়াদ চেক সতর্কতা: {e}")
+
+
 def is_scheduled_time_due(scheduled_str):
     if not scheduled_str or not scheduled_str.strip():
         return False
@@ -339,6 +376,8 @@ def process_approved_row(sheet, row_num, row_data, header_map):
 
 
 def main():
+    check_fb_token_expiry()
+
     sheet = get_sheet()
     header_map = get_header_map(sheet)
     all_rows = sheet.get_all_values()
