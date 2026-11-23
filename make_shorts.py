@@ -113,7 +113,7 @@ def get_prosody_for_sentence(sentence: str, idx: int, total: int) -> Tuple[str, 
         return "+10%", "+4Hz", 0.30
     if idx == total - 1:
         return "+8%", "-2Hz", 0.35
-    return "+11%", "0Hz", 0.24
+    return "+11%", "+0Hz", 0.24
 
 
 async def _synthesize_chunk(text: str, out_path: str, rate: str, pitch: str):
