@@ -121,22 +121,12 @@ async def _synthesize_chunk(text: str, out_path: str, rate: str, pitch: str):
     await communicate.save(out_path)
 
 
-def split_kinetic_phrases(sentence: str, max_words: int = 4) -> List[str]:
-    words = sentence.split()
-    phrases = []
-    for i in range(0, len(words), max_words):
-        phrases.append(" ".join(words[i:i + max_words]))
-    return phrases if phrases else [sentence]
-
-
-def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Dict]]:
+def generate_natural_voiceover(script: str, work_dir: str) -> str:
     cleaned = clean_voiceover_script(script)
     sentences = split_sentences_for_tts(cleaned)
     total = len(sentences)
 
     segment_files = []
-    kinetic_segments = []
-    current_time = 0.0
 
     for idx, sentence in enumerate(sentences):
         rate, pitch, pause_sec = get_prosody_for_sentence(sentence, idx, total)
@@ -157,32 +147,7 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
             stderr=subprocess.DEVNULL,
         )
 
-        probe = subprocess.run(
-            [
-                "ffprobe", "-v", "error", "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1", wav_seg,
-            ],
-            capture_output=True, text=True, check=True,
-        )
-        speech_dur = float(probe.stdout.strip())
-
-        phrases = split_kinetic_phrases(sentence, max_words=4)
-        total_chars = sum(len(p) for p in phrases) or 1
-        t_cursor = current_time
-        for p_i, ph in enumerate(phrases):
-            ph_dur = speech_dur * (len(ph) / total_chars)
-            kinetic_segments.append(
-                {
-                    "text": ph,
-                    "start": t_cursor,
-                    "end": t_cursor + ph_dur + (pause_sec * 0.5 if p_i == len(phrases) - 1 else 0.0),
-                    "is_hook": (idx == 0),
-                }
-            )
-            t_cursor += ph_dur
-
         segment_files.append(wav_seg)
-        current_time += speech_dur
 
         if pause_sec > 0:
             subprocess.run(
@@ -195,7 +160,6 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
                 stderr=subprocess.DEVNULL,
             )
             segment_files.append(sil_wav)
-            current_time += pause_sec
 
     concat_list = os.path.join(work_dir, "audio_concat.txt")
     with open(concat_list, "w", encoding="utf-8") as f:
@@ -209,7 +173,7 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    return final_voice_wav, kinetic_segments
+    return final_voice_wav
 
 
 def render_mixed_text_line(
@@ -386,41 +350,73 @@ def create_thumbnail_jpg(
 
 
 def create_theme_top_banner_png(out_path: str):
-    """ওয়েবসাইটের থিম কালারের সাথে ম্যাচ করা স্থির টপ ব্যানার (লোগোসহ যাতে রেন্ডারিংয়ে বাড়তি লেয়ার না লাগে)"""
-    w, h = VIDEO_WIDTH, 165
+    """প্রফেশনাল টপ ব্যানার: থিম-ম্যাচড স্লোগান ও নিচে পরিচ্ছন্ন ডোমেইন ব্যাজ"""
+    w, h = VIDEO_WIDTH, 185
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    draw.rectangle([0, 0, w, h - 8], fill=(15, 23, 42, 248))
+    # ব্যানার ব্যাকগ্রাউন্ড (Deep Navy #0F172A + Gold #F59E0B বর্ডার)
+    draw.rectangle([0, 0, w, h - 8], fill=(15, 23, 42, 250))
     draw.rectangle([0, h - 8, w, h], fill=(245, 158, 11, 255))
 
-    draw.ellipse([48, 22, 162, 136], fill=(255, 255, 255, 250), outline=(245, 158, 11, 255), width=4)
-    if os.path.exists(LOGO_FILE):
-        try:
-            logo = Image.open(LOGO_FILE).convert("RGBA")
-            logo = logo.resize((88, 88), Image.Resampling.LANCZOS)
-            img.paste(logo, (61, 35), logo)
-        except Exception:
-            pass
+    # বাম পাশে লোগোর জন্য সার্কুলার ফ্রেম (লোগোটি আলাদা লেয়ারে পরপর অ্যানিমেট হবে)
+    draw.ellipse([44, 24, 174, 154], fill=(255, 255, 255, 252), outline=(245, 158, 11, 255), width=4)
 
-    bn_font = find_font(BENGALI_FONT_PATHS, 48)
-    en_font = find_font(LATIN_FONT_PATHS, 46)
+    # ডান পাশের টেক্সট এরিয়া সেন্টার
+    center_x = 200 + (w - 230) // 2
+
+    # ১. থিম কালারের সাথে ম্যাচ করা স্লোগান: "সঠিক তথ্য, সহজ জীবন"
+    bn_slogan = find_font(BENGALI_FONT_PATHS, 46)
+    en_slogan = find_font(LATIN_FONT_PATHS, 44)
     slogan_text = "সঠিক তথ্য, সহজ জীবন"
-    center_x = 190 + (w - 220) // 2
-    sw = measure_mixed_text_width(draw, slogan_text, bn_font, en_font)
+    sw = measure_mixed_text_width(draw, slogan_text, bn_slogan, en_slogan)
     render_mixed_text_line(
-        draw, center_x - sw // 2, 48, slogan_text, bn_font, en_font, fill=(255, 255, 255, 255)
+        draw,
+        center_x - sw // 2,
+        24,
+        slogan_text,
+        bn_slogan,
+        en_slogan,
+        fill=(251, 191, 36, 255),  # থিম-ম্যাচড গোল্ডেন ইয়েলো
+    )
+
+    # ২. স্লোগানের ঠিক নিচে প্রফেশনাল ডোমেইন পিল ব্যাজ
+    bn_dom = find_font(BENGALI_FONT_PATHS, 30)
+    en_dom = find_font(LATIN_FONT_PATHS, 30)
+    dom_text = "www.homebdinfo.com"
+    dw = measure_mixed_text_width(draw, dom_text, bn_dom, en_dom)
+    pill_w = dw + 72
+    pill_h = 48
+    px0 = center_x - pill_w // 2
+    py0 = 96
+    draw.rounded_rectangle(
+        [px0, py0, px0 + pill_w, py0 + pill_h],
+        radius=24,
+        fill=(30, 41, 59, 255),
+        outline=(16, 185, 129, 240),
+        width=2,
+    )
+    render_mixed_text_line(
+        draw,
+        center_x - dw // 2,
+        py0 + 7,
+        dom_text,
+        bn_dom,
+        en_dom,
+        fill=(248, 250, 252, 255),
     )
 
     img.save(out_path, "PNG")
 
 
 def create_bottom_engagement_loop_mov(work_dir: str) -> str:
-    w, h = 880, 90
-    bn_font = find_font(BENGALI_FONT_PATHS, 34)
-    en_font = find_font(LATIN_FONT_PATHS, 36)
+    """নিচের নরমাল ও পরিচ্ছন্ন ফুটার লুপ"""
+    w, h = 840, 84
+    bn_font = find_font(BENGALI_FONT_PATHS, 32)
+    en_font = find_font(LATIN_FONT_PATHS, 34)
     full_domain = "www.homebdinfo.com"
 
+    frame_paths = []
     f_idx = 0
 
     def save_pill(text: str, bg_color: Tuple[int, int, int, int], border_color: Tuple[int, int, int, int], txt_color=(255, 255, 255, 255)):
@@ -431,24 +427,32 @@ def create_bottom_engagement_loop_mov(work_dir: str) -> str:
         draw = ImageDraw.Draw(img)
         if text:
             tw = measure_mixed_text_width(draw, text, bn_font, en_font)
-            pw = min(w - 20, tw + 80)
+            pw = min(w - 20, tw + 76)
             px0 = (w - pw) // 2
             draw.rounded_rectangle(
-                [px0, 10, px0 + pw, h - 10],
-                radius=35, fill=bg_color, outline=border_color, width=3,
+                [px0, 8, px0 + pw, h - 8],
+                radius=34, fill=bg_color, outline=border_color, width=2,
             )
-            render_mixed_text_line(draw, (w - tw) // 2, 23, text, bn_font, en_font, fill=txt_color)
+            render_mixed_text_line(draw, (w - tw) // 2, 21, text, bn_font, en_font, fill=txt_color)
         img.save(fp, "PNG")
+        frame_paths.append(fp)
 
+    # ১. ডোমেইন প্রদর্শন
     for i in range(1, len(full_domain) + 1):
-        save_pill(full_domain[:i] + "|", (15, 23, 42, 235), (16, 185, 129, 245))
-    for _ in range(10):
-        save_pill(full_domain, (15, 23, 42, 235), (16, 185, 129, 245))
-    for _ in range(14):
+        save_pill(full_domain[:i] + "|", (15, 23, 42, 230), (16, 185, 129, 230))
+    for _ in range(12):
+        save_pill(full_domain, (15, 23, 42, 230), (16, 185, 129, 230))
+
+    # ২. বিরতি
+    for _ in range(16):
         save_pill("", (0, 0, 0, 0), (0, 0, 0, 0))
+
+    # ৩. নরমাল এনগেজমেন্ট বার্তা
     for _ in range(18):
-        save_pill("👍 লাইক   |   💬 কমেন্ট   |   ↗️ শেয়ার করুন", (220, 38, 38, 240), (255, 255, 255, 235))
-    for _ in range(10):
+        save_pill("👍 লাইক   |   💬 কমেন্ট   |   ↗️ শেয়ার", (15, 23, 42, 230), (245, 158, 11, 230))
+
+    # ৪. বিরতি
+    for _ in range(12):
         save_pill("", (0, 0, 0, 0), (0, 0, 0, 0))
 
     out_mov = os.path.join(work_dir, "footer_loop.mov")
@@ -465,105 +469,75 @@ def create_bottom_engagement_loop_mov(work_dir: str) -> str:
     return out_mov
 
 
-def create_kinetic_typography_png(text: str, seg_idx: int, is_hook: bool, out_path: str):
-    canvas_w = 1020
-    canvas_h = 340
-    img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-
-    font_size = 64 if is_hook else 56
-    bn_font = find_font(BENGALI_FONT_PATHS, font_size)
-    en_font = find_font(LATIN_FONT_PATHS, font_size - 4)
-
-    lines = wrap_text_by_pixel(draw, text, bn_font, en_font, 940)[:2]
-    line_h = font_size + 24
-    total_h = len(lines) * line_h
-    start_y = (canvas_h - total_h) // 2
-
-    for i, ln in enumerate(lines):
-        lw = measure_mixed_text_width(draw, ln, bn_font, en_font)
-        lx = (canvas_w - lw) // 2
-        ly = start_y + i * line_h
-
-        if is_hook or (seg_idx + i) % 2 == 1:
-            txt_fill = (250, 204, 21, 255)
-        else:
-            txt_fill = (255, 255, 255, 255)
-
-        render_mixed_text_line(
-            draw,
-            lx,
-            ly,
-            ln,
-            bn_font,
-            en_font,
-            fill=txt_fill,
-            stroke_width=6,
-            stroke_fill=(10, 15, 28, 255),
-        )
-
-    img.save(out_path, "PNG")
-
-
 def create_outro_card_png(out_path: str):
+    """শেষ ৩.০ সেকেন্ডের নরমাল ও মার্জিত চ্যানেল আউট্রো কার্ড"""
     img = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (11, 17, 32, 252))
     draw = ImageDraw.Draw(img)
 
-    draw.rectangle([28, 28, VIDEO_WIDTH - 28, VIDEO_HEIGHT - 28], outline=(245, 158, 11, 240), width=6)
+    # প্রিমিয়াম বর্ডার
+    draw.rectangle([28, 28, VIDEO_WIDTH - 28, VIDEO_HEIGHT - 28], outline=(245, 158, 11, 220), width=5)
 
-    y_cursor = 340
+    # উপরে লোগো
+    y_cursor = 360
     if os.path.exists(LOGO_FILE):
         try:
             logo = Image.open(LOGO_FILE).convert("RGBA")
-            lw = 240
+            lw = 220
             lh = int(logo.height * (lw / logo.width))
             logo = logo.resize((lw, lh), Image.Resampling.LANCZOS)
             draw.ellipse(
-                [(VIDEO_WIDTH - lw) // 2 - 20, y_cursor - 20, (VIDEO_WIDTH + lw) // 2 + 20, y_cursor + lh + 20],
+                [(VIDEO_WIDTH - lw) // 2 - 18, y_cursor - 18, (VIDEO_WIDTH + lw) // 2 + 18, y_cursor + lh + 18],
                 fill=(255, 255, 255, 255),
                 outline=(245, 158, 11, 255),
-                width=6,
+                width=5,
             )
             img.paste(logo, ((VIDEO_WIDTH - lw) // 2, y_cursor), logo)
-            y_cursor += lh + 65
+            y_cursor += lh + 60
         except Exception:
             pass
 
-    bn_big = find_font(BENGALI_FONT_PATHS, 54)
-    en_big = find_font(LATIN_FONT_PATHS, 50)
-    bn_med = find_font(BENGALI_FONT_PATHS, 38)
-    en_med = find_font(LATIN_FONT_PATHS, 38)
+    bn_big = find_font(BENGALI_FONT_PATHS, 52)
+    en_big = find_font(LATIN_FONT_PATHS, 48)
+    bn_med = find_font(BENGALI_FONT_PATHS, 36)
+    en_med = find_font(LATIN_FONT_PATHS, 36)
+    bn_sm = find_font(BENGALI_FONT_PATHS, 32)
+    en_sm = find_font(LATIN_FONT_PATHS, 32)
 
     t1 = "সঠিক তথ্য, সহজ জীবন"
     w1 = measure_mixed_text_width(draw, t1, bn_big, en_big)
-    render_mixed_text_line(draw, (VIDEO_WIDTH - w1) // 2, y_cursor, t1, bn_big, en_big, fill=(250, 204, 21, 255))
-    y_cursor += 90
+    render_mixed_text_line(draw, (VIDEO_WIDTH - w1) // 2, y_cursor, t1, bn_big, en_big, fill=(251, 191, 36, 255))
+    y_cursor += 85
 
-    t2 = "বিস্তারিত গাইড ও আবেদন লিংক পেতে ভিজিট করুন"
-    w2 = measure_mixed_text_width(draw, t2, bn_med, en_med)
-    render_mixed_text_line(draw, (VIDEO_WIDTH - w2) // 2, y_cursor, t2, bn_med, en_med, fill=(226, 232, 240, 255))
-    y_cursor += 80
+    t2 = "বিস্তারিত তথ্য ও লিংক পেতে ডিসক্রিপশন বা কমেন্ট বক্স চেক করুন"
+    lines_t2 = wrap_text_by_pixel(draw, t2, bn_med, en_med, 880)
+    for ln in lines_t2:
+        w2 = measure_mixed_text_width(draw, ln, bn_med, en_med)
+        render_mixed_text_line(draw, (VIDEO_WIDTH - w2) // 2, y_cursor, ln, bn_med, en_med, fill=(226, 232, 240, 255))
+        y_cursor += 54
+    y_cursor += 36
 
-    bw, bh = 720, 96
+    # ওয়েবসাইট পিল
+    bw, bh = 680, 88
     bx0 = (VIDEO_WIDTH - bw) // 2
     draw.rounded_rectangle(
         [bx0, y_cursor, bx0 + bw, y_cursor + bh],
-        radius=48, fill=(16, 185, 129, 255), outline=(255, 255, 255, 245), width=4,
+        radius=44, fill=(16, 185, 129, 245), outline=(255, 255, 255, 230), width=3,
     )
-    dom_str = "🌐 www.homebdinfo.com"
+    dom_str = "www.homebdinfo.com"
     dw = measure_mixed_text_width(draw, dom_str, bn_med, en_med)
-    render_mixed_text_line(draw, (VIDEO_WIDTH - dw) // 2, y_cursor + 24, dom_str, bn_med, en_med, fill=(255, 255, 255, 255))
-    y_cursor += 160
+    render_mixed_text_line(draw, (VIDEO_WIDTH - dw) // 2, y_cursor + 22, dom_str, bn_med, en_med, fill=(255, 255, 255, 255))
+    y_cursor += 140
 
-    aw, ah = 920, 110
+    # নরমাল ও মার্জিত অ্যাকশন বার
+    aw, ah = 820, 92
     ax0 = (VIDEO_WIDTH - aw) // 2
     draw.rounded_rectangle(
         [ax0, y_cursor, ax0 + aw, y_cursor + ah],
-        radius=30, fill=(30, 41, 59, 245), outline=(245, 158, 11, 220), width=3,
+        radius=26, fill=(30, 41, 59, 240), outline=(148, 163, 184, 180), width=2,
     )
-    act_str = "👍 লাইক   •   💬 কমেন্ট   •   ↗️ শেয়ার   •   🔔 ফলো করুন"
-    aw_txt = measure_mixed_text_width(draw, act_str, bn_med, en_med)
-    render_mixed_text_line(draw, (VIDEO_WIDTH - aw_txt) // 2, y_cursor + 30, act_str, bn_med, en_med, fill=(255, 255, 255, 255))
+    act_str = "👍 লাইক    |    💬 কমেন্ট    |    🔔 সাবস্ক্রাইব"
+    aw_txt = measure_mixed_text_width(draw, act_str, bn_sm, en_sm)
+    render_mixed_text_line(draw, (VIDEO_WIDTH - aw_txt) // 2, y_cursor + 26, act_str, bn_sm, en_sm, fill=(241, 245, 249, 255))
 
     img.save(out_path, "PNG")
 
@@ -619,8 +593,8 @@ def capture_mobile_site_screenshot(post_url: str, out_png: str):
     return img.height
 
 
-def download_multiple_pixabay_clips(keywords: str, work_dir: str, max_clips: int = 3) -> List[str]:
-    """মাল্টি-সিন ভিডিওর জন্য Pixabay থেকে ৭২০p/মিডিয়াম রেজোলিউশনের অ্যাকশন ভিডিও ক্লিপ ডাউনলোড করে (মেমোরি সেফ)"""
+def download_multiple_pixabay_clips(keywords: str, work_dir: str, max_clips: int = 4) -> List[str]:
+    """মাল্টি-সিন ভিডিওর জন্য Pixabay থেকে অ্যাকশন ভিডিও ক্লিপ ডাউনলোড করে"""
     api_key = os.environ.get("PIXABAY_API_KEY", "").strip()
     if not api_key:
         return []
@@ -647,7 +621,7 @@ def download_multiple_pixabay_clips(keywords: str, work_dir: str, max_clips: int
                 if vid_id in used_ids:
                     continue
                 videos = hit.get("videos", {})
-                # মেমোরি ওভারফ্লো এড়াতে medium (720p) অগ্রাধিকার দেওয়া হয়েছে
+                # মেমোরি সেফটির জন্য medium (720p) অগ্রাধিকার দেওয়া হয়েছে
                 vid_info = videos.get("medium") or videos.get("small") or videos.get("large")
                 if vid_info and vid_info.get("url"):
                     out_mp4 = os.path.join(work_dir, f"stock_{len(downloaded)}.mp4")
@@ -664,11 +638,28 @@ def download_multiple_pixabay_clips(keywords: str, work_dir: str, max_clips: int
     return downloaded
 
 
+def prepare_logo_variants(work_dir: str) -> Optional[Tuple[str, str]]:
+    """লোগোটির একটি নরমাল (96x96) এবং একটি একটু বড় জুমড (114x114) ভার্সন তৈরি করে যাতে মেমোরি সেফ অ্যানিমেশন হয়"""
+    if not os.path.exists(LOGO_FILE):
+        return None
+    try:
+        logo = Image.open(LOGO_FILE).convert("RGBA")
+        logo_norm = logo.resize((96, 96), Image.Resampling.LANCZOS)
+        logo_zoom = logo.resize((114, 114), Image.Resampling.LANCZOS)
+
+        p_norm = os.path.join(work_dir, "logo_norm.png")
+        p_zoom = os.path.join(work_dir, "logo_zoom.png")
+        logo_norm.save(p_norm, "PNG")
+        logo_zoom.save(p_zoom, "PNG")
+        return p_norm, p_zoom
+    except Exception:
+        return None
+
+
 def build_final_video(
     screenshot_png: str,
     screenshot_h: int,
     voice_wav: str,
-    kinetic_segments: List[Dict],
     stock_clips: List[str],
     thumbnail_jpg: str,
     output_mp4: str,
@@ -689,56 +680,59 @@ def build_final_video(
     create_theme_top_banner_png(top_banner_png)
     create_outro_card_png(outro_png)
     footer_mov = create_bottom_engagement_loop_mov(work_dir)
+    logo_variants = prepare_logo_variants(work_dir)
 
-    # কাইনেটিক টেক্সট ইমেজ তৈরি
-    kinetic_pngs = []
-    for idx, seg in enumerate(kinetic_segments):
-        kp = os.path.join(work_dir, f"kin_{idx}.png")
-        create_kinetic_typography_png(seg["text"], idx, seg["is_hook"], kp)
-        kinetic_pngs.append((kp, seg["start"], seg["end"]))
-
-    # ধাপ ১: বেস ভিডিও + স্টক ক্লিপ + ব্যানার + ফুটার + আউট্রো রেন্ডার (কম মেমোরিতে নিরাপদভাবে)
-    base_rendered_mp4 = os.path.join(work_dir, "stage1_base.mp4")
-
-    inputs_s1 = [
-        "-loop", "1", "-framerate", str(FPS), "-t", f"{total_duration:.2f}", "-i", screenshot_png,
-        "-i", voice_wav,
-        "-i", top_banner_png,
-        "-stream_loop", "-1", "-t", f"{total_duration:.2f}", "-i", footer_mov,
-        "-i", outro_png,
-        "-i", thumbnail_jpg,
+    inputs = [
+        "-loop", "1", "-t", f"{total_duration:.2f}", "-i", screenshot_png,     # 0: স্ক্রলিং ওয়েবসাইট
+        "-i", voice_wav,                                                       # 1: ভয়েসওভার
+        "-loop", "1", "-t", f"{total_duration:.2f}", "-i", top_banner_png,     # 2: প্রফেশনাল টপ ব্যানার
+        "-stream_loop", "-1", "-t", f"{total_duration:.2f}", "-i", footer_mov, # 3: নিচের ফুটার লুপ
+        "-loop", "1", "-t", f"{OUTRO_DURATION:.2f}", "-i", outro_png,          # 4: শেষ ৩ সেকেন্ড আউট্রো
+        "-loop", "1", "-t", f"{COVER_DURATION:.2f}", "-i", thumbnail_jpg,      # 5: শুরুর কভার ফ্রেম
     ]
 
     next_idx = 6
     bgm_idx = None
     if os.path.exists(BGM_FILE):
-        inputs_s1.extend(["-stream_loop", "-1", "-t", f"{total_duration:.2f}", "-i", BGM_FILE])
+        inputs.extend(["-stream_loop", "-1", "-t", f"{total_duration:.2f}", "-i", BGM_FILE])
         bgm_idx = next_idx
+        next_idx += 1
+
+    logo_norm_idx = None
+    logo_zoom_idx = None
+    if logo_variants:
+        p_norm, p_zoom = logo_variants
+        inputs.extend(["-loop", "1", "-t", f"{total_duration:.2f}", "-i", p_norm])
+        logo_norm_idx = next_idx
+        next_idx += 1
+        inputs.extend(["-loop", "1", "-t", f"{total_duration:.2f}", "-i", p_zoom])
+        logo_zoom_idx = next_idx
         next_idx += 1
 
     stock_indices = []
     for sc_path in stock_clips:
-        inputs_s1.extend(["-stream_loop", "-1", "-t", f"{total_duration:.2f}", "-i", sc_path])
+        inputs.extend(["-stream_loop", "-1", "-t", f"{total_duration:.2f}", "-i", sc_path])
         stock_indices.append(next_idx)
         next_idx += 1
 
     scroll_dist = max(0, screenshot_h - VIDEO_HEIGHT)
-    filter_s1 = []
+    filter_parts = []
 
-    # ওয়েবসাইট স্ক্রোলিং (ভারী eval=frame ছাড়া স্মুথ স্ক্রল)
-    filter_s1.append(
+    # বেস লেয়ার: ওয়েবসাইট স্মুথ স্ক্রোলিং (ভারী eval=frame ছাড়া)
+    filter_parts.append(
         f"[0:v]crop={VIDEO_WIDTH}:{VIDEO_HEIGHT}:0:'min({scroll_dist}, {scroll_dist}*t/{max(1.0, voice_dur):.2f})',"
-        f"eq=brightness=-0.06:contrast=1.08[base_site]"
+        f"eq=brightness=-0.04:contrast=1.06[base_site]"
     )
     last_v = "base_site"
 
+    # মাল্টি-সিন কাট-অ্যাওয়ে: প্রথম ৪ সেকেন্ড হুক ক্লিপ + মাঝে মাঝে অ্যাকশন ক্লিপ ও ওয়েবসাইট
     if stock_indices:
         s0 = stock_indices[0]
-        filter_s1.append(
+        filter_parts.append(
             f"[{s0}:v]scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=increase,"
-            f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT},eq=brightness=-0.08:contrast=1.10[scene_hook]"
+            f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT},eq=brightness=-0.05:contrast=1.08[scene_hook]"
         )
-        filter_s1.append(
+        filter_parts.append(
             f"[{last_v}][scene_hook]overlay=0:0:enable='between(t,0,{HOOK_DURATION:.2f})'[v_s0]"
         )
         last_v = "v_s0"
@@ -750,101 +744,79 @@ def build_final_video(
             clip_end = min(voice_dur, t_mark + 4.5)
             sc_lbl = f"scene_act_{clip_cursor}"
             out_lbl = f"v_act_{clip_cursor}"
-            filter_s1.append(
+            filter_parts.append(
                 f"[{c_idx}:v]scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=increase,"
-                f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT},eq=brightness=-0.08:contrast=1.10[{sc_lbl}]"
+                f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT},eq=brightness=-0.05:contrast=1.08[{sc_lbl}]"
             )
-            filter_s1.append(
+            filter_parts.append(
                 f"[{last_v}][{sc_lbl}]overlay=0:0:enable='between(t,{t_mark:.2f},{clip_end:.2f})'[{out_lbl}]"
             )
             last_v = out_lbl
             t_mark = clip_end + 4.2
             clip_cursor += 1
 
-    # নিচের ডার্ক ভিনিয়েট বক্স
-    filter_s1.append(
-        f"[{last_v}]drawbox=x=0:y=1150:w={VIDEO_WIDTH}:h=770:color=black@0.42:t=fill[v_grad]"
-    )
-    last_v = "v_grad"
-
-    # টপ ব্যানার (লোগোসহ)
-    filter_s1.append(f"[{last_v}][2:v]overlay=0:0[v_banner]")
+    # উপরের প্রফেশনাল টপ ব্যানার
+    filter_parts.append(f"[{last_v}][2:v]overlay=0:0[v_banner]")
     last_v = "v_banner"
 
+    # লোগোটি একটু পর পর (প্রতি ৫ সেকেন্ডে ১.৫ সেকেন্ডের জন্য) অ্যানিমেট হবে
+    # সার্কেল সেন্টার: x = 44 + 65 = 109, y = 24 + 65 = 89
+    # 96x96 এর জন্য: x = 109 - 48 = 61, y = 89 - 48 = 41
+    # 114x114 এর জন্য: x = 109 - 57 = 52, y = 89 - 57 = 32
+    if logo_norm_idx is not None and logo_zoom_idx is not None:
+        filter_parts.append(
+            f"[{last_v}][{logo_norm_idx}:v]overlay=61:41:enable='lt(mod(t,5),3.5)'[v_logo_n]"
+        )
+        filter_parts.append(
+            f"[v_logo_n][{logo_zoom_idx}:v]overlay=52:32:enable='gte(mod(t,5),3.5)'[v_logo_z]"
+        )
+        last_v = "v_logo_z"
+
     # নিচের ফুটার লুপ
-    filter_s1.append(
-        f"[{last_v}][3:v]overlay=(W-w)/2:1730:enable='between(t,0,{voice_dur:.2f})'[v_footer]"
+    filter_parts.append(
+        f"[{last_v}][3:v]overlay=(W-w)/2:1760:enable='between(t,0,{voice_dur:.2f})'[v_footer]"
     )
     last_v = "v_footer"
 
-    # প্রগ্রেস বার
-    filter_s1.append(
-        f"[{last_v}]drawbox=x=0:y=165:w='iw*(t/{total_duration:.2f})':h=8:color=#10B981@0.95:t=fill[v_prog]"
+    # প্রগ্রেস বার (ব্যানারের ঠিক নিচে y=185 এ)
+    filter_parts.append(
+        f"[{last_v}]drawbox=x=0:y=185:w='iw*(t/{total_duration:.2f})':h=8:color=#10B981@0.95:t=fill[v_prog]"
     )
     last_v = "v_prog"
 
-    # শেষ ৩.০ সেকেন্ড আউট্রো কার্ড
-    filter_s1.append(
-        f"[{last_v}][4:v]overlay=0:0:enable='between(t,{voice_dur:.2f},{total_duration:.2f})'[v_outro]"
+    # শেষ ৩.০ সেকেন্ডের নরমাল আউট্রো কার্ড (eof_action=pass যাতে সময় শেষে আটকে না থাকে)
+    filter_parts.append(
+        f"[{last_v}][4:v]overlay=0:0:enable='between(t,{voice_dur:.2f},{total_duration:.2f})':eof_action=pass[v_outro]"
     )
     last_v = "v_outro"
 
-    # শুরুতে ০.৩৫ সেকেন্ড কভার থাম্বনেইল
-    filter_s1.append(
+    # একদম শুরুতে ০.৩৫ সেকেন্ড কভার থাম্বনেইল ফ্রেম
+    filter_parts.append(
         f"[5:v]scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}[thumb_cover];"
-        f"[{last_v}][thumb_cover]overlay=0:0:enable='between(t,0,{COVER_DURATION:.2f})'[v_s1_final]"
+        f"[{last_v}][thumb_cover]overlay=0:0:enable='between(t,0,{COVER_DURATION:.2f})':eof_action=pass[v_final]"
     )
 
-    # অডিও মিক্সিং
+    # অডিও মিক্সিং (ভয়েস + ১৬% ব্যাকগ্রাউন্ড মিউজিক)
     if bgm_idx is not None:
-        filter_s1.append(
+        filter_parts.append(
             f"[{bgm_idx}:a]volume={BGM_VOLUME}[bgm_low];"
-            f"[1:a][bgm_low]amix=inputs=2:duration=longest:dropout_transition=2[a_final]"
+            f"[1:a][bgm_low]amix=inputs=2:duration=first:dropout_transition=2[a_final]"
         )
     else:
-        filter_s1.append("[1:a]apad[a_final]")
+        filter_parts.append("[1:a]apad[a_final]")
 
-    cmd_s1 = [
-        "ffmpeg", "-y", *inputs_s1,
-        "-filter_complex", ";".join(filter_s1),
-        "-map", "[v_s1_final]", "-map", "[a_final]",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
-        "-threads", "4", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k",
+    filter_complex = ";".join(filter_parts)
+
+    cmd = [
+        "ffmpeg", "-y", *inputs,
+        "-filter_complex", filter_complex,
+        "-map", "[v_final]", "-map", "[a_final]",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "22", "-threads", "4",
+        "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
         "-r", str(FPS), "-t", f"{total_duration:.2f}",
-        base_rendered_mp4,
-    ]
-    subprocess.run(cmd_s1, check=True)
-
-    # ধাপ ২: কাইনেটিক টাইপোগ্রাফি সাবটাইটেল ওভারলে (স্ট্যাটিক ইমেজ হিসেবে নিরাপদ ওভারলে)
-    if not kinetic_pngs:
-        os.replace(base_rendered_mp4, output_mp4)
-        return
-
-    inputs_s2 = ["-i", base_rendered_mp4]
-    for kp, _, _ in kinetic_pngs:
-        inputs_s2.extend(["-i", kp])
-
-    filter_s2 = []
-    last_v2 = "0:v"
-    for i, (_, st, en) in enumerate(kinetic_pngs):
-        k_in = i + 1
-        out_lbl = f"v_k_{i}"
-        filter_s2.append(
-            f"[{last_v2}][{k_in}:v]overlay=(W-w)/2:(1340-h/2):enable='between(t,{st:.2f},{en:.2f})'[{out_lbl}]"
-        )
-        last_v2 = out_lbl
-
-    cmd_s2 = [
-        "ffmpeg", "-y", *inputs_s2,
-        "-filter_complex", ";".join(filter_s2),
-        "-map", f"[{last_v2}]", "-map", "0:a",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
-        "-threads", "4", "-pix_fmt", "yuv420p",
-        "-c:a", "copy",
         output_mp4,
     ]
-    subprocess.run(cmd_s2, check=True)
+    subprocess.run(cmd, check=True)
 
 
 def upload_to_github_release(video_path: str, thumb_path: str, row_num: int, title: str) -> Tuple[str, str]:
@@ -1001,22 +973,21 @@ def main():
             print("1. Capturing mobile website screenshot...")
             sc_height = capture_mobile_site_screenshot(post_url, screenshot_png)
 
-            print("2. Generating studio-quality voiceover & kinetic segments...")
-            voice_wav, kinetic_segments = generate_natural_voiceover(script, work_dir)
+            print("2. Generating studio-quality voiceover...")
+            voice_wav = generate_natural_voiceover(script, work_dir)
 
-            print("3. Fetching multiple action video clips for dynamic multi-scene switching...")
-            stock_clips = download_multiple_pixabay_clips(keywords, work_dir, max_clips=3)
+            print("3. Fetching action video clips for dynamic multi-scene switching...")
+            stock_clips = download_multiple_pixabay_clips(keywords, work_dir, max_clips=4)
 
             print("4. Generating attractive branded thumbnail...")
             first_clip = stock_clips[0] if stock_clips else None
             create_thumbnail_jpg(yt_title, screenshot_png, first_clip, thumb_jpg, work_dir)
 
-            print("5. Rendering final multi-scene professional short...")
+            print("5. Rendering final clean multi-scene short...")
             build_final_video(
                 screenshot_png=screenshot_png,
                 screenshot_h=sc_height,
                 voice_wav=voice_wav,
-                kinetic_segments=kinetic_segments,
                 stock_clips=stock_clips,
                 thumbnail_jpg=thumb_jpg,
                 output_mp4=final_mp4,
