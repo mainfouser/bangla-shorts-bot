@@ -62,9 +62,9 @@ def update_cells(sheet, row_num, header_map, updates):
 def generate_seo_metadata(raw_title, script_text, post_url):
     default_meta = {
         "yt_title": f"{raw_title[:85]} #Shorts",
-        "yt_description": f"{raw_title}\n\nবিস্তারিত পড়ুন ও সরাসরি আবেদন লিংক: {post_url}\n\n#Shorts #BanglaShorts #HomeBDInfo",
+        "yt_description": f"{raw_title}\n\nবিস্তারিত পড়ুন ও সরাসরি লিংক: {post_url}\n\n#Shorts #BanglaShorts #HomeBDInfo",
         "yt_tags": ["Bangla Shorts", "Bangladesh", "Home BD Info", "Bangla Tech", "Tutorial"],
-        "fb_caption": f"{raw_title}\n\nবিস্তারিত গাইড ও সরাসরি আবেদন লিংক প্রথম কমেন্টে দেওয়া আছে 👇\n\n#BanglaReels #Bangladesh #HomeBDInfo #InfoVideo"
+        "fb_caption": f"{raw_title}\n\nবিস্তারিত গাইড ও লিংক প্রথম কমেন্টে দেওয়া আছে 👇\n\n#BanglaReels #Bangladesh #HomeBDInfo #InfoVideo"
     }
 
     if not GEMINI_API_KEY:
@@ -105,7 +105,7 @@ def generate_seo_metadata(raw_title, script_text, post_url):
         yt_hashtags = data.get("yt_hashtags", "#Shorts #BanglaShorts #HomeBDInfo")
         yt_description = (
             f"{yt_summary}\n\n"
-            f"🔗 বিস্তারিত গাইড ও সরাসরি আবেদন লিংক:\n{post_url}\n\n"
+            f"🔗 বিস্তারিত গাইড ও লিংক:\n{post_url}\n\n"
             f"{yt_hashtags}"
         )
 
