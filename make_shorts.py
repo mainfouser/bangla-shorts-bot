@@ -1,5 +1,6 @@
 import os
 import re
+import gc
 import json
 import math
 import time
@@ -7,6 +8,7 @@ import asyncio
 import random
 import tempfile
 import subprocess
+from urllib.parse import urljoin
 from typing import List, Dict, Optional, Tuple
 
 import requests
@@ -149,11 +151,13 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
         asyncio.run(_synthesize_phrase(sentence, raw_mp3, rate, pitch))
 
         subprocess.run(
-            ["ffmpeg", "-y", "-i", raw_mp3, "-ar", "44100", "-ac", "2", wav_seg],
+            ["ffmpeg", "-y", "-threads", "2", "-i", raw_mp3, "-ar", "44100", "-ac", "2", wav_seg],
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        if os.path.exists(raw_mp3):
+            os.remove(raw_mp3)
 
         probe = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", wav_seg],
@@ -185,7 +189,7 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
         if end_pause > 0:
             sil_wav = os.path.join(work_dir, f"sil_{idx}.wav")
             subprocess.run(
-                ["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", f"{end_pause:.2f}", sil_wav],
+                ["ffmpeg", "-y", "-threads", "2", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", f"{end_pause:.2f}", sil_wav],
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -202,7 +206,7 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
     final_voice_wav = os.path.join(work_dir, "voiceover_full.wav")
 
     subprocess.run(
-        ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list, "-c", "copy", raw_concat_wav],
+        ["ffmpeg", "-y", "-threads", "2", "-f", "concat", "-safe", "0", "-i", concat_list, "-c", "copy", raw_concat_wav],
         check=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -210,7 +214,7 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
 
     subprocess.run(
         [
-            "ffmpeg", "-y", "-i", raw_concat_wav,
+            "ffmpeg", "-y", "-threads", "2", "-i", raw_concat_wav,
             "-af", "highpass=f=80,equalizer=f=220:t=q:w=1.0:g=2.5,equalizer=f=3000:t=q:w=1.4:g=2.0,acompressor=threshold=-18dB:ratio=2.8:attack=6:release=70,loudnorm=I=-15:TP=-1.5:LRA=11",
             "-ar", "44100", "-ac", "2", final_voice_wav,
         ],
@@ -218,6 +222,13 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+
+    for sf in segment_files:
+        if os.path.exists(sf):
+            os.remove(sf)
+    if os.path.exists(raw_concat_wav):
+        os.remove(raw_concat_wav)
+
     return final_voice_wav, kinetic_segments
 
 
@@ -285,9 +296,7 @@ def create_minimal_watermark_png(out_path: str):
     w, h = 460, 88
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-
     draw.rounded_rectangle([4, 8, w - 4, h - 8], radius=38, fill=(6, 45, 34, 210), outline=(250, 204, 21, 210), width=2)
-
     text_x = 28
     if os.path.exists(LOGO_FILE):
         try:
@@ -300,7 +309,6 @@ def create_minimal_watermark_png(out_path: str):
             text_x = 90
         except Exception:
             pass
-
     bn_font = find_font(BENGALI_FONT_PATHS, 30)
     en_font = find_font(LATIN_FONT_PATHS, 30)
     render_mixed_text_line(draw, text_x, 25, "homebdinfo.com", bn_font, en_font, fill=(255, 255, 255, 250))
@@ -313,35 +321,29 @@ def create_clean_subtitle_png(text: str, is_hook: bool, out_path: str):
     canvas_h = 380
     img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-
     font_size = 64 if is_hook else 56
     bn_font = find_font(BENGALI_FONT_PATHS, font_size)
     en_font = find_font(LATIN_FONT_PATHS, font_size - 4)
-
     lines = wrap_text_by_pixel(draw, text, bn_font, en_font, 900)
     if len(lines) > 3:
         lines = lines[:3]
-
     line_h = font_size + 22
     total_h = len(lines) * line_h
     start_y = (canvas_h - total_h) // 2
-
     max_line_w = max((measure_mixed_text_width(draw, ln, bn_font, en_font) for ln in lines), default=400)
     pad_x, pad_y = 42, 24
     box_x0 = max(20, (canvas_w - max_line_w) // 2 - pad_x)
     box_x1 = min(canvas_w - 20, (canvas_w + max_line_w) // 2 + pad_x)
     box_y0 = max(10, start_y - pad_y)
     box_y1 = min(canvas_h - 10, start_y + total_h + pad_y - 10)
-
     border_col = (250, 204, 21, 220) if is_hook else (255, 255, 255, 90)
     draw.rounded_rectangle(
         [box_x0, box_y0, box_x1, box_y1],
         radius=28,
-        fill=(8, 16, 14, 195),
+        fill=(8, 16, 14, 210),
         outline=border_col,
         width=3 if is_hook else 2,
     )
-
     for i, ln in enumerate(lines):
         lw = measure_mixed_text_width(draw, ln, bn_font, en_font)
         lx = (canvas_w - lw) // 2
@@ -351,25 +353,23 @@ def create_clean_subtitle_png(text: str, is_hook: bool, out_path: str):
             draw, lx, ly, ln, bn_font, en_font,
             fill=txt_fill, stroke_width=3, stroke_fill=(0, 0, 0, 255)
         )
-
     img.save(out_path, "PNG")
 
 
 def create_thumbnail_jpg(
     title: str,
     screenshot_png: str,
-    stock_clips: List[str],
+    visual_clips: List[str],
     out_jpg: str,
     work_dir: str,
 ):
     bg_img = None
-    first_clip = stock_clips[0] if stock_clips else None
-
+    first_clip = visual_clips[0] if visual_clips else None
     if first_clip and os.path.exists(first_clip):
         frame_png = os.path.join(work_dir, "thumb_stock_frame.png")
         try:
             subprocess.run(
-                ["ffmpeg", "-y", "-i", first_clip, "-ss", "00:00:00.5", "-vframes", "1", frame_png],
+                ["ffmpeg", "-y", "-threads", "2", "-i", first_clip, "-ss", "00:00:00.5", "-vframes", "1", frame_png],
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -382,6 +382,7 @@ def create_thumbnail_jpg(
                 left = (nw - VIDEO_WIDTH) // 2
                 top = (nh - VIDEO_HEIGHT) // 2
                 bg_img = raw.crop((left, top, left + VIDEO_WIDTH, top + VIDEO_HEIGHT))
+                os.remove(frame_png)
         except Exception:
             bg_img = None
 
@@ -438,6 +439,8 @@ def create_thumbnail_jpg(
         render_mixed_text_line(draw, lx, ly, ln, bn_title_font, en_title_font, fill=txt_color)
 
     canvas.convert("RGB").save(out_jpg, "JPEG", quality=92)
+    del canvas, overlay, bg_img
+    gc.collect()
 
 
 def create_outro_card_png(out_path: str):
@@ -499,33 +502,177 @@ def create_outro_card_png(out_path: str):
     img.save(out_path, "PNG")
 
 
-def capture_mobile_site_screenshot(post_url: str, out_png: str) -> int:
+def _encode_lightweight_motion_clip(image_path: str, out_mp4: str, duration: int = 8):
+    """GitHub Actions-এর RAM সুরক্ষিত রেখে স্মুথ জুম-ইন মোশন গ্রাফিক্স ক্লিপ তৈরি করে (zoompan ছাড়াই)"""
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-threads", "2", "-loop", "1", "-t", str(duration), "-i", image_path,
+            "-vf", (
+                f"scale=w='trunc({VIDEO_WIDTH}(1+0.07*(t/{duration}))/2)*2':h=-2,"
+                f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT}:(iw-{VIDEO_WIDTH})/2:(ih-{VIDEO_HEIGHT})/2"
+            ),
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+            "-r", str(FPS), "-t", str(duration), out_mp4,
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def create_dynamic_topic_graphic_clip(
+    headline: str,
+    bullet_points: List[str],
+    work_dir: str,
+    clip_idx: int,
+) -> Optional[str]:
+    """যেকোনো আর্টিকেলের শিরোনাম ও মূল পয়েন্ট দিয়ে প্রাসঙ্গিক ইনফো-মোশন গ্রাফিক্স কার্ড তৈরি করে"""
+    try:
+        card_png = os.path.join(work_dir, f"motion_card_{clip_idx}.png")
+        clip_mp4 = os.path.join(work_dir, f"motion_card_{clip_idx}.mp4")
+        img = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (6, 36, 28, 255))
+        draw = ImageDraw.Draw(img)
+
+        for gx in range(0, VIDEO_WIDTH, 90):
+            draw.line([(gx, 0), (gx, VIDEO_HEIGHT)], fill=(255, 255, 255, 14), width=1)
+        for gy in range(0, VIDEO_HEIGHT, 90):
+            draw.line([(0, gy), (VIDEO_WIDTH, gy)], fill=(255, 255, 255, 14), width=1)
+
+        badge_w, badge_h = 420, 66
+        bx0 = (VIDEO_WIDTH - badge_w) // 2
+        by0 = 220
+        draw.rounded_rectangle([bx0, by0, bx0 + badge_w, by0 + badge_h], radius=33, fill=(250, 204, 21, 255))
+        bn_badge = find_font(BENGALI_FONT_PATHS, 32)
+        en_badge = find_font(LATIN_FONT_PATHS, 30)
+        b_txt = "গুরুত্বপূর্ণ তথ্য ও আপডেট"
+        bw = measure_mixed_text_width(draw, b_txt, bn_badge, en_badge)
+        render_mixed_text_line(draw, (VIDEO_WIDTH - bw) // 2, by0 + 14, b_txt, bn_badge, en_badge, fill=(6, 36, 28, 255))
+
+        card_x0, card_y0 = 60, 320
+        card_x1, card_y1 = VIDEO_WIDTH - 60, 910
+        draw.rounded_rectangle(
+            [card_x0, card_y0, card_x1, card_y1],
+            radius=32,
+            fill=(10, 56, 44, 240),
+            outline=(250, 204, 21, 230),
+            width=4,
+        )
+
+        clean_head = re.sub(r"#\w+", "", headline).strip()
+        bn_h = find_font(BENGALI_FONT_PATHS, 46)
+        en_h = find_font(LATIN_FONT_PATHS, 42)
+        h_lines = wrap_text_by_pixel(draw, clean_head, bn_h, en_h, VIDEO_WIDTH - 190)[:2]
+        cur_y = card_y0 + 38
+        for hl in h_lines:
+            hw = measure_mixed_text_width(draw, hl, bn_h, en_h)
+            render_mixed_text_line(draw, (VIDEO_WIDTH - hw) // 2, cur_y, hl, bn_h, en_h, fill=(250, 204, 21, 255))
+            cur_y += 64
+
+        draw.line([(card_x0 + 40, cur_y + 12), (card_x1 - 40, cur_y + 12)], fill=(255, 255, 255, 70), width=2)
+        cur_y += 38
+
+        bn_pt = find_font(BENGALI_FONT_PATHS, 36)
+        en_pt = find_font(LATIN_FONT_PATHS, 34)
+        valid_pts = [p.strip() for p in bullet_points if len(p.strip()) > 6][:3]
+        for pt in valid_pts:
+            if cur_y > card_y1 - 80:
+                break
+            pt_lines = wrap_text_by_pixel(draw, f"✔ {pt}", bn_pt, en_pt, VIDEO_WIDTH - 200)[:2]
+            for pl in pt_lines:
+                render_mixed_text_line(draw, card_x0 + 45, cur_y, pl, bn_pt, en_pt, fill=(255, 255, 255, 245))
+                cur_y += 48
+            cur_y += 14
+
+        img.convert("RGB").save(card_png, "PNG")
+        del img, draw
+        gc.collect()
+        _encode_lightweight_motion_clip(card_png, clip_mp4, duration=8)
+        if os.path.exists(card_png):
+            os.remove(card_png)
+        gc.collect()
+        return clip_mp4
+    except Exception:
+        return None
+
+
+def capture_site_and_extract_images(post_url: str, out_png: str, work_dir: str) -> Tuple[int, List[str], List[str]]:
+    """সব অ্যাড রিমুভ করে ঝকঝকে স্ক্রিনশট নেয়, আর্টিকেলের ছবি ও মূল হেডিংগুলো সংগ্রহ করে"""
     target_url = post_url if post_url.startswith("http") else "https://homebdinfo.com"
+    image_urls = []
+    article_headings = []
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--disable-dev-shm-usage", "--no-sandbox", "--disable-gpu"],
+        )
         context = browser.new_context(
             viewport={"width": 390, "height": 844},
-            device_scale_factor=2.5,
+            device_scale_factor=2.0,
             is_mobile=True,
             has_touch=True,
             user_agent="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
         )
         page = context.new_page()
+        ad_domains = [
+            "doubleclick.net", "googlesyndication.com", "googleadservices.com",
+            "adservice.google", "adnxs.com", "popads", "monetag", "adsterra", "propellerads"
+        ]
+        page.route(
+            "**/*",
+            lambda route: route.abort()
+            if any(d in route.request.url.lower() for d in ad_domains)
+            else route.continue_(),
+        )
         try:
             page.goto(target_url, wait_until="networkidle", timeout=45000)
         except Exception:
             page.goto(target_url, wait_until="domcontentloaded", timeout=45000)
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(1600)
+
         page.evaluate(
             """() => {
                 document.body.style.zoom = "1.08";
-                const selectors = ['[id*="cookie"]', '[class*="cookie"]', '[class*="popup"]', '.adsbygoogle'];
-                selectors.forEach(sel => {
-                    document.querySelectorAll(sel).forEach(el => el.style.display = 'none');
+                const adSelectors = [
+                    'ins.adsbygoogle', '.adsbygoogle', '[id*="google_ads"]', '[id*="ad-"]',
+                    '[class*="ad-container"]', '[class*="adsense"]', '[class*="banner-ad"]',
+                    '[id*="cookie"]', '[class*="cookie"]', '[class*="popup"]', '[class*="modal"]',
+                    'iframe', '[data-ad-client]', '[data-ad-slot]'
+                ];
+                adSelectors.forEach(sel => {
+                    document.querySelectorAll(sel).forEach(el => el.remove());
                 });
             }"""
         )
-        page.wait_for_timeout(800)
+        page.wait_for_timeout(500)
+
+        extracted = page.evaluate(
+            """() => {
+                const container = document.querySelector('article, .post-body, .entry-content, main') || document.body;
+                const imgs = Array.from(container.querySelectorAll('img')).map(img => ({
+                    src: img.currentSrc || img.src || img.getAttribute('data-src') || '',
+                    w: img.naturalWidth || img.width || 0,
+                    h: img.naturalHeight || img.height || 0
+                }));
+                const headings = Array.from(container.querySelectorAll('h2, h3'))
+                    .map(h => (h.innerText || '').trim())
+                    .filter(t => t.length > 8 && t.length < 90 && !t.includes('লেখায় যা আছে'));
+                return { imgs, headings };
+            }"""
+        )
+        article_headings = extracted.get("headings", [])[:6]
+        seen_urls = set()
+        for item in extracted.get("imgs", []):
+            src = item.get("src", "").strip()
+            if not src or src.startswith("data:"):
+                continue
+            full_src = urljoin(target_url, src)
+            lower_src = full_src.lower()
+            if any(skip in lower_src for skip in ["logo", "icon", "avatar", "emoji", "banner-ad", "doubleclick"]):
+                continue
+            if item.get("w", 0) >= 260 and item.get("h", 0) >= 150 and full_src not in seen_urls:
+                seen_urls.add(full_src)
+                image_urls.append(full_src)
+
         page.screenshot(path=out_png, full_page=True)
         browser.close()
 
@@ -541,28 +688,90 @@ def capture_mobile_site_screenshot(post_url: str, out_png: str) -> int:
         padded.paste(img, (0, 0))
         img = padded
 
-    tint = Image.new("RGBA", img.size, (10, 20, 16, 130))
+    tint = Image.new("RGBA", img.size, (8, 18, 14, 38))
     img = Image.alpha_composite(img.convert("RGBA"), tint).convert("RGB")
     img.save(out_png, "PNG")
-    return img.height
+    final_sc_height = img.height
+    del img, tint
+    gc.collect()
+
+    article_clips = []
+    for idx, img_u in enumerate(image_urls[:3]):
+        try:
+            resp = requests.get(img_u, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+            if resp.status_code == 200 and len(resp.content) > 4096:
+                raw_img_p = os.path.join(work_dir, f"art_raw_{idx}.png")
+                framed_img_p = os.path.join(work_dir, f"art_framed_{idx}.png")
+                clip_mp4_p = os.path.join(work_dir, f"art_clip_{idx}.mp4")
+                with open(raw_img_p, "wb") as f:
+                    f.write(resp.content)
+                src_im = Image.open(raw_img_p).convert("RGB")
+                if src_im.width < 240 or src_im.height < 130:
+                    src_im.close()
+                    os.remove(raw_img_p)
+                    continue
+
+                bg = src_im.resize((VIDEO_WIDTH, VIDEO_HEIGHT), Image.Resampling.LANCZOS)
+                bg = bg.filter(ImageFilter.GaussianBlur(radius=28))
+                dark_bg = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (6, 28, 22, 160))
+                canvas = Image.alpha_composite(bg.convert("RGBA"), dark_bg)
+                target_w = VIDEO_WIDTH - 80
+                target_h = int(src_im.height * (target_w / src_im.width))
+                if target_h > 900:
+                    target_h = 900
+                    target_w = int(src_im.width * (target_h / src_im.height))
+                fg = src_im.resize((target_w, target_h), Image.Resampling.LANCZOS)
+                fx = (VIDEO_WIDTH - target_w) // 2
+                fy = 350 if target_h <= 560 else 270
+                draw_c = ImageDraw.Draw(canvas)
+                draw_c.rounded_rectangle(
+                    [fx - 8, fy - 8, fx + target_w + 8, fy + target_h + 8],
+                    radius=26,
+                    fill=(250, 204, 21, 235),
+                )
+                canvas.paste(fg, (fx, fy))
+                canvas.convert("RGB").save(framed_img_p, "PNG")
+                del src_im, bg, dark_bg, canvas, fg, draw_c
+                gc.collect()
+
+                _encode_lightweight_motion_clip(framed_img_p, clip_mp4_p, duration=8)
+                article_clips.append(clip_mp4_p)
+                for tmp_p in (raw_img_p, framed_img_p):
+                    if os.path.exists(tmp_p):
+                        os.remove(tmp_p)
+                gc.collect()
+        except Exception:
+            continue
+
+    return final_sc_height, article_clips, article_headings
 
 
-def download_multiple_pixabay_clips(keywords: str, work_dir: str, max_clips: int = 4) -> List[str]:
-    """সবচেয়ে প্রাসঙ্গিক টপ ভিডিও ক্লিপ ডাউনলোড করা"""
+def download_relevant_stock_clips(keywords: str, work_dir: str, max_clips: int = 2) -> List[str]:
+    """যেকোনো আর্টিকেলের ইংরেজি কিওয়ার্ড অনুযায়ী প্রাসঙ্গিক ও পরিচ্ছন্ন স্টক ফুটেজ আনে"""
+    if max_clips <= 0:
+        return []
     api_key = os.environ.get("PIXABAY_API_KEY", "").strip()
     if not api_key:
         return []
     kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
-    fallback_kws = ["finance savings", "mobile banking", "business document", "smartphone typing"]
-    search_kws = kw_list + fallback_kws
+    if not kw_list:
+        return []
+
+    banned_tags = {
+        "animal", "monkey", "baboon", "ape", "fire", "flame", "wildfire",
+        "dog", "cat", "bird", "insect", "spider", "snake", "skull", "blood"
+    }
     downloaded = []
     seen_ids = set()
 
-    for kw in search_kws:
+    for kw in kw_list[:4]:
         if len(downloaded) >= max_clips:
             break
         try:
-            url = f"https://pixabay.com/api/videos/?key={api_key}&q={requests.utils.quote(kw)}&order=popular&per_page=5&safesearch=true"
+            url = (
+                f"https://pixabay.com/api/videos/?key={api_key}"
+                f"&q={requests.utils.quote(kw)}&order=relevant&per_page=6&safesearch=true"
+            )
             resp = requests.get(url, timeout=20).json()
             hits = resp.get("hits", [])
             for hit in hits:
@@ -570,6 +779,9 @@ def download_multiple_pixabay_clips(keywords: str, work_dir: str, max_clips: int
                     break
                 vid_id = hit.get("id")
                 if vid_id in seen_ids:
+                    continue
+                tags_str = str(hit.get("tags", "")).lower()
+                if any(b in tags_str for b in banned_tags):
                     continue
                 videos = hit.get("videos", {})
                 vid_info = videos.get("medium") or videos.get("small") or videos.get("tiny")
@@ -579,13 +791,14 @@ def download_multiple_pixabay_clips(keywords: str, work_dir: str, max_clips: int
                     v_data = requests.get(vid_info["url"], timeout=45).content
                     with open(raw_p, "wb") as f:
                         f.write(v_data)
+                    del v_data
 
                     subprocess.run(
                         [
                             "ffmpeg", "-y", "-threads", "2", "-i", raw_p,
-                            "-vf", f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=increase,crop={VIDEO_WIDTH}:{VIDEO_HEIGHT},eq=brightness=-0.10:contrast=1.08",
+                            "-vf", f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=increase,crop={VIDEO_WIDTH}:{VIDEO_HEIGHT},eq=brightness=-0.06:contrast=1.06",
                             "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-r", str(FPS),
-                            "-t", "10", norm_p,
+                            "-t", "8", norm_p,
                         ],
                         check=True,
                         stdout=subprocess.DEVNULL,
@@ -595,6 +808,7 @@ def download_multiple_pixabay_clips(keywords: str, work_dir: str, max_clips: int
                         os.remove(raw_p)
                     downloaded.append(norm_p)
                     seen_ids.add(vid_id)
+                    gc.collect()
         except Exception:
             continue
     return downloaded
@@ -604,7 +818,6 @@ def build_subtitle_overlay_track(kinetic_segments: List[Dict], voice_dur: float,
     """সব সাবটাইটেলকে একটি হালকা ট্রান্সপারেন্ট ভিডিও ট্র্যাকে রূপান্তর"""
     sub_dir = os.path.join(work_dir, "sub_frames")
     os.makedirs(sub_dir, exist_ok=True)
-
     blank_png = os.path.join(sub_dir, "blank.png")
     Image.new("RGBA", (1040, 380), (0, 0, 0, 0)).save(blank_png, "PNG")
 
@@ -617,7 +830,6 @@ def build_subtitle_overlay_track(kinetic_segments: List[Dict], voice_dur: float,
     concat_file = os.path.join(sub_dir, "sub_concat.txt")
     cursor = 0.0
     entries = []
-
     for kp, st, en in seg_pngs:
         if st >= voice_dur or en <= st:
             continue
@@ -625,10 +837,8 @@ def build_subtitle_overlay_track(kinetic_segments: List[Dict], voice_dur: float,
             entries.append((blank_png, st - cursor))
         entries.append((kp, en - st))
         cursor = en
-
     if cursor < voice_dur:
         entries.append((blank_png, voice_dur - cursor))
-
     if not entries:
         entries.append((blank_png, voice_dur))
 
@@ -648,6 +858,7 @@ def build_subtitle_overlay_track(kinetic_segments: List[Dict], voice_dur: float,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+    gc.collect()
     return sub_mov
 
 
@@ -656,7 +867,7 @@ def build_final_video(
     screenshot_h: int,
     voice_wav: str,
     kinetic_segments: List[Dict],
-    stock_clips: List[str],
+    visual_clips: List[str],
     thumbnail_jpg: str,
     output_mp4: str,
     work_dir: str,
@@ -672,7 +883,6 @@ def build_final_video(
 
     watermark_png = os.path.join(work_dir, "watermark_pill.png")
     outro_png = os.path.join(work_dir, "outro_card.png")
-
     create_minimal_watermark_png(watermark_png)
     create_outro_card_png(outro_png)
     sub_mov = build_subtitle_overlay_track(kinetic_segments, voice_dur, work_dir)
@@ -681,7 +891,7 @@ def build_final_video(
     base_inputs = ["-loop", "1", "-t", f"{voice_dur:.2f}", "-i", screenshot_png]
     clip_indices = []
     next_i = 1
-    for cp in stock_clips:
+    for cp in visual_clips[:4]:
         if os.path.exists(cp):
             base_inputs.extend(["-stream_loop", "-1", "-t", f"{voice_dur:.2f}", "-i", cp])
             clip_indices.append(next_i)
@@ -692,14 +902,12 @@ def build_final_video(
         f"[0:v]crop={VIDEO_WIDTH}:{VIDEO_HEIGHT}:0:'min({scroll_dist}, {scroll_dist}*(t/{max(1.0, voice_dur):.2f}))'[site_bg]"
     ]
     last_v = "site_bg"
-
     scene_windows = [
         (0.0, HOOK_DURATION),
-        (8.5, 14.0),
-        (18.5, 24.5),
-        (29.0, voice_dur),
+        (9.0, 15.0),
+        (20.0, 26.0),
+        (30.5, voice_dur),
     ]
-
     if clip_indices:
         for s_i, (win_start, win_end) in enumerate(scene_windows):
             if win_start >= voice_dur:
@@ -724,6 +932,7 @@ def build_final_video(
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+    gc.collect()
 
     final_inputs = [
         "-i", base_mp4,
@@ -733,7 +942,6 @@ def build_final_video(
         "-loop", "1", "-t", f"{total_duration:.2f}", "-i", outro_png,
         "-loop", "1", "-t", f"{COVER_DURATION:.2f}", "-i", thumbnail_jpg,
     ]
-
     bgm_idx = None
     if os.path.exists(BGM_FILE):
         final_inputs.extend(["-stream_loop", "-1", "-t", f"{total_duration:.2f}", "-i", BGM_FILE])
@@ -748,7 +956,6 @@ def build_final_video(
         f"[5:v]scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}[thumb_cover]",
         f"[v_outro][thumb_cover]overlay=0:0:enable='between(t,0,{COVER_DURATION:.2f})'[v_final]",
     ]
-
     if bgm_idx is not None:
         fade_start = max(0.0, total_duration - 1.5)
         f_parts.extend([
@@ -770,6 +977,7 @@ def build_final_video(
         ],
         check=True,
     )
+    gc.collect()
 
 
 def upload_to_github_release(video_path: str, thumb_path: str, row_num: int, title: str) -> Tuple[str, str]:
@@ -790,7 +998,12 @@ def upload_to_github_release(video_path: str, thumb_path: str, row_num: int, tit
         "draft": False,
         "prerelease": False,
     }
-    rel_resp = requests.post(f"https://api.github.com/repos/{GITHUB_REPO}/releases", headers=headers, json=release_payload, timeout=30)
+    rel_resp = requests.post(
+        f"https://api.github.com/repos/{GITHUB_REPO}/releases",
+        headers=headers,
+        json=release_payload,
+        timeout=30,
+    )
     rel_resp.raise_for_status()
     rel_data = rel_resp.json()
     release_id = str(rel_data["id"])
@@ -912,17 +1125,27 @@ def main():
             thumb_jpg = os.path.join(work_dir, f"thumb_row_{target_row}.jpg")
             final_mp4 = os.path.join(work_dir, f"bangla_short_row_{target_row}.mp4")
 
-            print("1. Capturing mobile website screenshot...")
-            sc_height = capture_mobile_site_screenshot(post_url, screenshot_png)
+            print("1. Capturing ad-free site screenshot & extracting article graphics...")
+            sc_height, article_clips, article_headings = capture_site_and_extract_images(post_url, screenshot_png, work_dir)
 
             print("2. Generating natural, human-like voiceover...")
             voice_wav, kinetic_segments = generate_natural_voiceover(script, work_dir)
 
-            print("3. Fetching & pre-scaling stock video clips...")
-            downloaded_clips = download_multiple_pixabay_clips(keywords, work_dir, max_clips=4)
+            print("3. Preparing universal topic-relevant visual clips...")
+            visual_clips = list(article_clips)
+            if len(visual_clips) < 2:
+                bullets = article_headings if len(article_headings) >= 2 else split_sentences_for_tts(clean_voiceover_script(script))[1:4]
+                info_card_clip = create_dynamic_topic_graphic_clip(yt_title, bullets, work_dir, len(visual_clips))
+                if info_card_clip:
+                    visual_clips.append(info_card_clip)
+
+            needed_stock = max(0, 3 - len(visual_clips))
+            if needed_stock > 0:
+                stock_clips = download_relevant_stock_clips(keywords, work_dir, max_clips=needed_stock)
+                visual_clips.extend(stock_clips)
 
             print("4. Generating clean branded thumbnail...")
-            create_thumbnail_jpg(yt_title, screenshot_png, downloaded_clips, thumb_jpg, work_dir)
+            create_thumbnail_jpg(yt_title, screenshot_png, visual_clips, thumb_jpg, work_dir)
 
             print("5. Rendering clean final video...")
             build_final_video(
@@ -930,7 +1153,7 @@ def main():
                 screenshot_h=sc_height,
                 voice_wav=voice_wav,
                 kinetic_segments=kinetic_segments,
-                stock_clips=downloaded_clips,
+                visual_clips=visual_clips,
                 thumbnail_jpg=thumb_jpg,
                 output_mp4=final_mp4,
                 work_dir=work_dir,
