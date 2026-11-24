@@ -21,7 +21,7 @@ GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "mainfouser/bangla-shorts-bot"
 SHEET_NAME = "Shorts_Queue"
 BGM_FILE = "bgm.mp3"
 LOGO_FILE = "logo.png"
-BGM_VOLUME = 0.14
+BGM_VOLUME = 0.08
 
 VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920
@@ -82,7 +82,6 @@ def clean_voiceover_script(text: str) -> str:
     text = re.sub(r"homebdinfo\.com\s*\(?হোম\s*বিডি\s*ইনফো\s*ডট\s*কম\)?", "হোম বিডি ইনফো ডট কম", text, flags=re.IGNORECASE)
     text = re.sub(r"https?://(?:www\.)?homebdinfo\.com\S*", "হোম বিডি ইনফো ডট কম", text, flags=re.IGNORECASE)
     text = re.sub(r"(?:www\.)?homebdinfo\.com", "হোম বিডি ইনফো ডট কম", text, flags=re.IGNORECASE)
-    # কমা ও হাইফেনের পর স্বাভাবিক নিঃশ্বাসের বিরতির জন্য সামান্য স্পেস ও বিরতি চিহ্ন পরিষ্কার করা
     text = re.sub(r"\s*—\s*", ", ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
@@ -94,23 +93,18 @@ def split_sentences_for_tts(script: str) -> List[str]:
 
 
 def get_natural_prosody(sentence: str, idx: int, total: int) -> Tuple[str, str, float]:
-    """একঘেয়েমি ও রোবোটিক ভাব দূর করতে বাক্যের ধরন অনুযায়ী গতি, পিচ ও বিরতি নির্ধারণ"""
+    """বাক্যের ধরন অনুযায়ী প্রাকৃতিক গতি, পিচ ও বিরতি নির্ধারণ"""
     if idx == 0:
-        # হুক লাইন: দর্শকের মনোযোগ টানতে একটু প্রাণবন্ত ও উঁচু স্বর
-        return "+12%", "+2Hz", 0.28
+        return "+10%", "+2Hz", 0.25
     if "?" in sentence or any(w in sentence for w in ["কীভাবে", "কেন", "কী", "কত", "কখন"]):
-        # প্রশ্নবোধক বাক্য: কৌতূহলী টোন
-        return "+9%", "+4Hz", 0.32
+        return "+8%", "+3Hz", 0.28
     if any(w in sentence for w in ["সতর্ক", "জরুরি", "অবশ্যই", "মনে রাখবেন", "ভুল", "আইন", "ধাপ"]):
-        # গুরুত্বপূর্ণ তথ্য বা সতর্কতা: কিছুটা ধীর ও গম্ভীর টোন
-        return "+5%", "-2Hz", 0.28
+        return "+5%", "-1Hz", 0.25
     if idx == total - 1:
-        # শেষ বাক্য (CTA): আমন্ত্রণমূলক ও উষ্ণ টোন
-        return "+8%", "+1Hz", 0.35
-    # সাধারণ বাক্যগুলোতে সামান্য বৈচিত্র্য আনা যাতে একটানা রোবোটিক না শোনায়
+        return "+7%", "+1Hz", 0.30
     if idx % 2 == 1:
-        return "+10%", "+1Hz", 0.22
-    return "+7%", "-1Hz", 0.25
+        return "+8%", "+1Hz", 0.20
+    return "+6%", "0Hz", 0.22
 
 
 async def _synthesize_phrase(text: str, out_path: str, rate: str, pitch: str):
@@ -118,7 +112,7 @@ async def _synthesize_phrase(text: str, out_path: str, rate: str, pitch: str):
     await communicate.save(out_path)
 
 
-def split_kinetic_chunks(sentence: str, max_chars: int = 30) -> List[str]:
+def split_kinetic_chunks(sentence: str, max_chars: int = 28) -> List[str]:
     words = sentence.split()
     chunks = []
     cur = []
@@ -137,6 +131,7 @@ def split_kinetic_chunks(sentence: str, max_chars: int = 30) -> List[str]:
 
 
 def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Dict]]:
+    """কমার জায়গায় না ভেঙে পুরো বাক্য একসাথে জেনারেট করে স্বাভাবিক ফ্লো বজায় রাখা"""
     cleaned = clean_voiceover_script(script)
     sentences = split_sentences_for_tts(cleaned)
     total = len(sentences)
@@ -144,67 +139,39 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
     segment_files = []
     kinetic_segments = []
     current_time = 0.0
-    part_counter = 0
 
     for idx, sentence in enumerate(sentences):
         rate, pitch, end_pause = get_natural_prosody(sentence, idx, total)
 
-        # বড় বাক্যকে কমার (,) জায়গায় ভেঙে প্রাকৃতিক শ্বাস নেওয়ার বিরতি দেওয়া
-        clauses = [c.strip() for c in re.split(r"(?<=[,;:])\s+", sentence) if c.strip()]
-        if not clauses:
-            clauses = [sentence]
+        raw_mp3 = os.path.join(work_dir, f"tts_{idx}.mp3")
+        wav_seg = os.path.join(work_dir, f"tts_{idx}.wav")
+
+        asyncio.run(_synthesize_phrase(sentence, raw_mp3, rate, pitch))
+
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", raw_mp3, "-ar", "44100", "-ac", "2", wav_seg],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", wav_seg],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        dur = float(probe.stdout.strip())
+        segment_files.append(wav_seg)
 
         sentence_start = current_time
-        sentence_speech_dur = 0.0
+        current_time += dur
 
-        for c_idx, clause in enumerate(clauses):
-            raw_mp3 = os.path.join(work_dir, f"tts_{part_counter}.mp3")
-            wav_seg = os.path.join(work_dir, f"tts_{part_counter}.wav")
-            part_counter += 1
-
-            # একই বাক্যের ভেতরের অংশগুলোতে সামান্য পিচ ভ্যারিয়েশন
-            c_pitch = pitch
-            if len(clauses) > 1 and c_idx == 0 and "?" not in clause:
-                c_pitch = "+2Hz"
-
-            asyncio.run(_synthesize_phrase(clause, raw_mp3, rate, c_pitch))
-
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", raw_mp3, "-ar", "44100", "-ac", "2", wav_seg],
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-
-            probe = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", wav_seg],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            dur = float(probe.stdout.strip())
-            segment_files.append(wav_seg)
-            current_time += dur
-            sentence_speech_dur += dur
-
-            # বাক্যের মাঝখানে কমা থাকলে ০.১৪ সেকেন্ডের ন্যাচারাল মাইক্রো-পজ
-            if c_idx < len(clauses) - 1:
-                micro_sil = os.path.join(work_dir, f"msil_{part_counter}.wav")
-                subprocess.run(
-                    ["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", "0.14", micro_sil],
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                segment_files.append(micro_sil)
-                current_time += 0.14
-                sentence_speech_dur += 0.14
-
-        chunks = split_kinetic_chunks(sentence, max_chars=30)
+        chunks = split_kinetic_chunks(sentence, max_chars=28)
         total_chars = sum(len(c) for c in chunks) or 1
         t_cursor = sentence_start
         for c_i, ch in enumerate(chunks):
-            ch_dur = sentence_speech_dur * (len(ch) / total_chars)
+            ch_dur = dur * (len(ch) / total_chars)
             kinetic_segments.append(
                 {
                     "text": ch,
@@ -241,7 +208,6 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
         stderr=subprocess.DEVNULL,
     )
 
-    # মানুষের কণ্ঠের মতো উষ্ণতা (Warmth) ও স্পষ্টতা আনতে স্টুডিও EQ ও কম্প্রেসর
     subprocess.run(
         [
             "ffmpeg", "-y", "-i", raw_concat_wav,
@@ -315,13 +281,12 @@ def wrap_text_by_pixel(
 
 
 def create_minimal_watermark_png(out_path: str):
-    """উপরের বাম কোণায় পরিচ্ছন্ন ও মিনিমাল ব্র্যান্ড ওয়াটারমার্ক পিল (স্ক্রিন ব্লক করবে না)"""
+    """উপরের বাম কোণায় পরিচ্ছন্ন ব্র্যান্ড ওয়াটারমার্ক পিল"""
     w, h = 460, 88
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    # সেমি-ট্রান্সপারেন্ট ডার্ক এমেরাল্ড পিল
-    draw.rounded_rectangle([4, 8, w - 4, h - 8], radius=38, fill=(6, 45, 34, 185), outline=(250, 204, 21, 190), width=2)
+    draw.rounded_rectangle([4, 8, w - 4, h - 8], radius=38, fill=(6, 45, 34, 210), outline=(250, 204, 21, 210), width=2)
 
     text_x = 28
     if os.path.exists(LOGO_FILE):
@@ -338,55 +303,53 @@ def create_minimal_watermark_png(out_path: str):
 
     bn_font = find_font(BENGALI_FONT_PATHS, 30)
     en_font = find_font(LATIN_FONT_PATHS, 30)
-    render_mixed_text_line(draw, text_x, 25, "homebdinfo.com", bn_font, en_font, fill=(255, 255, 255, 240))
+    render_mixed_text_line(draw, text_x, 25, "homebdinfo.com", bn_font, en_font, fill=(255, 255, 255, 250))
     img.save(out_path, "PNG")
 
 
 def create_clean_subtitle_png(text: str, is_hook: bool, out_path: str):
-    """ভারী সবুজ বক্স ছাড়া মডার্ন, বোল্ড ও সহজপাঠ্য কাইনেটিক সাবটাইটেল (গাঢ় শ্যাডো ও আউটলাইনসহ)"""
+    """যেকোনো ব্যাকগ্রাউন্ডের ওপর ১০০% স্পষ্ট পড়ার জন্য সেমি-ট্রান্সপারেন্ট ডার্ক কার্ডসহ মডার্ন সাবটাইটেল"""
     canvas_w = 1040
     canvas_h = 380
     img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    font_size = 66 if is_hook else 58
+    font_size = 64 if is_hook else 56
     bn_font = find_font(BENGALI_FONT_PATHS, font_size)
     en_font = find_font(LATIN_FONT_PATHS, font_size - 4)
 
-    lines = wrap_text_by_pixel(draw, text, bn_font, en_font, 940)
+    lines = wrap_text_by_pixel(draw, text, bn_font, en_font, 900)
     if len(lines) > 3:
         lines = lines[:3]
 
-    line_h = font_size + 24
+    line_h = font_size + 22
     total_h = len(lines) * line_h
     start_y = (canvas_h - total_h) // 2
 
-    # লেখার পেছনে খুব হালকা সফট গ্লো/শ্যাডো লেয়ার তৈরি
-    shadow_layer = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
-    sh_draw = ImageDraw.Draw(shadow_layer)
+    max_line_w = max((measure_mixed_text_width(draw, ln, bn_font, en_font) for ln in lines), default=400)
+    pad_x, pad_y = 42, 24
+    box_x0 = max(20, (canvas_w - max_line_w) // 2 - pad_x)
+    box_x1 = min(canvas_w - 20, (canvas_w + max_line_w) // 2 + pad_x)
+    box_y0 = max(10, start_y - pad_y)
+    box_y1 = min(canvas_h - 10, start_y + total_h + pad_y - 10)
+
+    border_col = (250, 204, 21, 220) if is_hook else (255, 255, 255, 90)
+    draw.rounded_rectangle(
+        [box_x0, box_y0, box_x1, box_y1],
+        radius=28,
+        fill=(8, 16, 14, 195),
+        outline=border_col,
+        width=3 if is_hook else 2,
+    )
 
     for i, ln in enumerate(lines):
         lw = measure_mixed_text_width(draw, ln, bn_font, en_font)
         lx = (canvas_w - lw) // 2
         ly = start_y + i * line_h
-        render_mixed_text_line(
-            sh_draw, lx + 4, ly + 6, ln, bn_font, en_font,
-            fill=(0, 0, 0, 230), stroke_width=8, stroke_fill=(0, 0, 0, 230)
-        )
-
-    shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=6))
-    img = Image.alpha_composite(img, shadow_layer)
-    draw = ImageDraw.Draw(img)
-
-    for i, ln in enumerate(lines):
-        lw = measure_mixed_text_width(draw, ln, bn_font, en_font)
-        lx = (canvas_w - lw) // 2
-        ly = start_y + i * line_h
-        # হুক লাইন বা মাঝের লাইন উজ্জ্বল হলুদ, বাকি লাইন সাদা — কোনো বক্স ছাড়াই স্পষ্ট দেখাবে
         txt_fill = (250, 204, 21, 255) if (is_hook or i == 1) else (255, 255, 255, 255)
         render_mixed_text_line(
             draw, lx, ly, ln, bn_font, en_font,
-            fill=txt_fill, stroke_width=5, stroke_fill=(10, 15, 13, 255)
+            fill=txt_fill, stroke_width=3, stroke_fill=(0, 0, 0, 255)
         )
 
     img.save(out_path, "PNG")
@@ -578,19 +541,19 @@ def capture_mobile_site_screenshot(post_url: str, out_png: str) -> int:
         padded.paste(img, (0, 0))
         img = padded
 
-    # সাদা ওয়েবসাইট স্ক্রিনশটের ওপর হালকা ডার্ক টিন্ট যাতে ওপরের সাবটাইটেল চোখে না লাগে ও স্পষ্ট দেখায়
-    tint = Image.new("RGBA", img.size, (10, 20, 16, 115))
+    tint = Image.new("RGBA", img.size, (10, 20, 16, 130))
     img = Image.alpha_composite(img.convert("RGBA"), tint).convert("RGB")
     img.save(out_png, "PNG")
     return img.height
 
 
 def download_multiple_pixabay_clips(keywords: str, work_dir: str, max_clips: int = 4) -> List[str]:
+    """সবচেয়ে প্রাসঙ্গিক টপ ভিডিও ক্লিপ ডাউনলোড করা (random.shuffle বাদ দেওয়া হয়েছে)"""
     api_key = os.environ.get("PIXABAY_API_KEY", "").strip()
     if not api_key:
         return []
     kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
-    fallback_kws = ["smartphone typing", "office work", "digital technology", "bangladesh city"]
+    fallback_kws = ["finance savings", "mobile banking", "business document", "smartphone typing"]
     search_kws = kw_list + fallback_kws
     downloaded = []
     seen_ids = set()
@@ -599,10 +562,9 @@ def download_multiple_pixabay_clips(keywords: str, work_dir: str, max_clips: int
         if len(downloaded) >= max_clips:
             break
         try:
-            url = f"https://pixabay.com/api/videos/?key={api_key}&q={requests.utils.quote(kw)}&per_page=8&safesearch=true"
+            url = f"https://pixabay.com/api/videos/?key={api_key}&q={requests.utils.quote(kw)}&order=popular&per_page=5&safesearch=true"
             resp = requests.get(url, timeout=20).json()
             hits = resp.get("hits", [])
-            random.shuffle(hits)
             for hit in hits:
                 if len(downloaded) >= max_clips:
                     break
@@ -618,11 +580,10 @@ def download_multiple_pixabay_clips(keywords: str, work_dir: str, max_clips: int
                     with open(raw_p, "wb") as f:
                         f.write(v_data)
 
-                    # মেমোরি সেফটি: 1080x1920 সাইজে প্রি-স্কেল ও হালকা ডার্ক টিন্ট
                     subprocess.run(
                         [
                             "ffmpeg", "-y", "-threads", "2", "-i", raw_p,
-                            "-vf", f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=increase,crop={VIDEO_WIDTH}:{VIDEO_HEIGHT},eq=brightness=-0.08:contrast=1.06",
+                            "-vf", f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=increase,crop={VIDEO_WIDTH}:{VIDEO_HEIGHT},eq=brightness=-0.10:contrast=1.08",
                             "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-r", str(FPS),
                             "-t", "10", norm_p,
                         ],
@@ -640,7 +601,7 @@ def download_multiple_pixabay_clips(keywords: str, work_dir: str, max_clips: int
 
 
 def build_subtitle_overlay_track(kinetic_segments: List[Dict], voice_dur: float, work_dir: str) -> str:
-    """সব সাবটাইটেলকে একটি হালকা ট্রান্সপারেন্ট ভিডিও ট্র্যাকে রূপান্তর (মেমোরি সেফটি)"""
+    """সব সাবটাইটেলকে একটি হালকা ট্রান্সপারেন্ট ভিডিও ট্র্যাকে রূপান্তর"""
     sub_dir = os.path.join(work_dir, "sub_frames")
     os.makedirs(sub_dir, exist_ok=True)
 
@@ -716,7 +677,6 @@ def build_final_video(
     create_outro_card_png(outro_png)
     sub_mov = build_subtitle_overlay_track(kinetic_segments, voice_dur, work_dir)
 
-    # ধাপ ১: বেস লেয়ার কম্পাইল (ওয়েবসাইট স্ক্রোল + স্টক ভিডিও ক্লিপ)
     base_mp4 = os.path.join(work_dir, "base_layer.mp4")
     base_inputs = ["-loop", "1", "-t", f"{voice_dur:.2f}", "-i", screenshot_png]
     clip_indices = []
@@ -765,7 +725,6 @@ def build_final_video(
         stderr=subprocess.DEVNULL,
     )
 
-    # ধাপ ২: ক্লিন ওয়াটারমার্ক, সাবটাইটেল, আউট্রো ও ন্যাচারাল অডিও মার্জ
     final_inputs = [
         "-i", base_mp4,
         "-i", voice_wav,
@@ -783,7 +742,7 @@ def build_final_video(
     f_parts = [
         f"[0:v]tpad=stop_mode=clone:stop_duration={OUTRO_DURATION:.2f}[v_base]",
         f"[v_base][2:v]overlay=32:48:enable='between(t,0,{voice_dur:.2f})'[v_wm]",
-        f"[v_wm][3:v]overlay=(W-w)/2:1180:enable='between(t,0,{voice_dur:.2f})'[v_sub]",
+        f"[v_wm][3:v]overlay=(W-w)/2:980:enable='between(t,0,{voice_dur:.2f})'[v_sub]",
         f"[v_sub]drawbox=x=0:y=0:w='iw*(t/{total_duration:.2f})':h=8:color=#FACC15@0.90:t=fill[v_prog]",
         f"[v_prog][4:v]overlay=0:0:enable='between(t,{voice_dur:.2f},{total_duration:.2f})'[v_outro]",
         f"[5:v]scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}[thumb_cover]",
@@ -791,8 +750,9 @@ def build_final_video(
     ]
 
     if bgm_idx is not None:
+        fade_start = max(0.0, total_duration - 1.5)
         f_parts.extend([
-            f"[{bgm_idx}:a]volume={BGM_VOLUME}[bgm_low]",
+            f"[{bgm_idx}:a]volume={BGM_VOLUME},afade=t=out:st={fade_start:.2f}:d=1.5[bgm_low]",
             f"[1:a]apad=pad_dur={OUTRO_DURATION:.2f}[v_pad]",
             f"[v_pad][bgm_low]amix=inputs=2:duration=first:dropout_transition=2[a_final]",
         ])
