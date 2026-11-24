@@ -104,7 +104,7 @@ def get_natural_prosody(sentence: str, idx: int, total: int) -> Tuple[str, str, 
         return "+7%", "+1Hz", 0.30
     if idx % 2 == 1:
         return "+8%", "+1Hz", 0.20
-    return "+6%", "0Hz", 0.22
+    return "+6%", "+0Hz", 0.22
 
 
 async def _synthesize_phrase(text: str, out_path: str, rate: str, pitch: str):
