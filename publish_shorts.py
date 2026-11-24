@@ -44,6 +44,11 @@ def get_header_map(sheet):
     return {header.strip(): idx + 1 for idx, header in enumerate(headers)}
 
 
+def get_col_val(row, header_map, col_name, default=""):
+    idx = header_map.get(col_name, 0) - 1
+    return row[idx].strip() if 0 <= idx < len(row) else default
+
+
 def update_cells(sheet, row_num, header_map, updates):
     cells_to_update = []
     for col_name, value in updates.items():
@@ -192,6 +197,21 @@ def remove_auto_captions(youtube, video_id):
         print(f"অটো-ক্যাপশন চেক সতর্কতা: {e}")
 
 
+def sanitize_yt_tags(tags):
+    """ইউটিউবের নিয়ম অনুযায়ী ট্যাগ পরিষ্কার করে এবং ৫০০ ক্যারেক্টারের নিচে রাখে"""
+    clean_tags = []
+    total_chars = 0
+    for tag in tags:
+        t = re.sub(r'[<>"\']', '', str(tag)).strip()
+        if not t:
+            continue
+        if total_chars + len(t) + 2 > 400:
+            break
+        clean_tags.append(t)
+        total_chars += len(t) + 2
+    return clean_tags
+
+
 def upload_to_youtube(video_path, seo_meta):
     if not YOUTUBE_OAUTH_TOKEN:
         raise ValueError("YOUTUBE_OAUTH_TOKEN পাওয়া যায়নি।")
@@ -203,13 +223,19 @@ def upload_to_youtube(video_path, seo_meta):
 
     youtube = build("youtube", "v3", credentials=creds)
 
+    clean_title = re.sub(r'[<>]', '', seo_meta["yt_title"]).strip()[:95]
+    if not clean_title:
+        clean_title = "Bangla Info Video #Shorts"
+
+    clean_desc = re.sub(r'[<>]', '', seo_meta["yt_description"]).strip()[:4900]
+    clean_tags = sanitize_yt_tags(seo_meta.get("yt_tags", []))
+
     body = {
         "snippet": {
-            "title": seo_meta["yt_title"],
-            "description": seo_meta["yt_description"],
-            "tags": seo_meta["yt_tags"],
-            "categoryId": "27",
-            "defaultAudioLanguage": "zxx"
+            "title": clean_title,
+            "description": clean_desc,
+            "tags": clean_tags,
+            "categoryId": "27"
         },
         "status": {
             "privacyStatus": "public",
@@ -285,7 +311,7 @@ def upload_to_facebook_reels(video_path, seo_meta, post_url, thumb_path=None):
     if post_url or thumb_path:
         print("ফেসবুক রিলস প্রসেসিং শেষ হওয়ার জন্য অপেক্ষা করা হচ্ছে...")
         is_ready = False
-        for attempt in range(12):
+        for attempt in range(18):
             time.sleep(5)
             try:
                 status_res = requests.get(
@@ -417,15 +443,25 @@ def is_scheduled_time_due(scheduled_str):
 
 
 def process_approved_row(sheet, row_num, row_data, header_map):
-    raw_title = row_data[header_map["Shorts Title (YT)"] - 1]
-    script_text = row_data[header_map["Bangla Voiceover Script"] - 1]
-    post_url = row_data[header_map["Post URL"] - 1] if "Post URL" in header_map else "https://www.homebdinfo.com"
-    release_id = row_data[header_map["Drive File ID"] - 1]
-    video_url = row_data[header_map["Drive File URL"] - 1]
+    raw_title = get_col_val(row_data, header_map, "Shorts Title (YT)")
+    script_text = get_col_val(row_data, header_map, "Bangla Voiceover Script")
+    post_url = get_col_val(row_data, header_map, "Post URL", "https://www.homebdinfo.com")
+    release_id = get_col_val(row_data, header_map, "Drive File ID")
+    video_url = get_col_val(row_data, header_map, "Drive File URL")
+
+    existing_yt_status = get_col_val(row_data, header_map, "YouTube Status")
+    existing_yt_id = get_col_val(row_data, header_map, "YouTube Video ID")
+    existing_yt_url = get_col_val(row_data, header_map, "YouTube URL")
+    existing_yt_time = get_col_val(row_data, header_map, "YouTube Published At")
+
+    existing_fb_status = get_col_val(row_data, header_map, "Facebook Status")
+    existing_fb_id = get_col_val(row_data, header_map, "Facebook Video ID")
+    existing_fb_url = get_col_val(row_data, header_map, "Facebook URL")
+    existing_fb_time = get_col_val(row_data, header_map, "Facebook Published At")
 
     print(f"পাবলিশিং শুরু হচ্ছে: Row {row_num} - {raw_title}")
 
-    if not video_url or not str(video_url).strip().startswith("http"):
+    if not video_url or not video_url.startswith("http"):
         raise ValueError("Drive File URL খালি বা সঠিক নয়! ভিডিওটি আগে জেনারেট হতে হবে।")
 
     update_cells(sheet, row_num, header_map, {"Status": "PUBLISHING"})
@@ -438,24 +474,38 @@ def process_approved_row(sheet, row_num, row_data, header_map):
         thumb_path = download_thumbnail_from_release(video_url, row_num, "temp_thumb.jpg")
         seo_meta = generate_seo_metadata(raw_title, script_text, post_url)
 
-        yt_id, yt_url = upload_to_youtube(video_path, seo_meta)
-        yt_time_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        # YouTube Upload (ডুপ্লিকেট চেকসহ)
+        if existing_yt_status == "PUBLISHED" and existing_yt_url:
+            print(f"YouTube ইতিমধ্যেই পাবলিশ করা আছে, স্কিপ করা হচ্ছে: {existing_yt_url}")
+            yt_id, yt_url, yt_time_str = existing_yt_id, existing_yt_url, existing_yt_time
+        else:
+            yt_id, yt_url = upload_to_youtube(video_path, seo_meta)
+            yt_time_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            update_cells(sheet, row_num, header_map, {
+                "YouTube Status": "PUBLISHED",
+                "YouTube Video ID": yt_id,
+                "YouTube URL": yt_url,
+                "YouTube Published At": yt_time_str
+            })
 
-        fb_id, fb_url = upload_to_facebook_reels(video_path, seo_meta, post_url, thumb_path)
-        fb_time_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        # Facebook Upload (ডুপ্লিকেট চেকসহ)
+        if existing_fb_status == "PUBLISHED" and existing_fb_url:
+            print(f"Facebook ইতিমধ্যেই পাবলিশ করা আছে, স্কিপ করা হচ্ছে: {existing_fb_url}")
+            fb_id, fb_url, fb_time_str = existing_fb_id, existing_fb_url, existing_fb_time
+        else:
+            fb_id, fb_url = upload_to_facebook_reels(video_path, seo_meta, post_url, thumb_path)
+            fb_time_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+            update_cells(sheet, row_num, header_map, {
+                "Facebook Status": "PUBLISHED",
+                "Facebook Video ID": fb_id,
+                "Facebook URL": fb_url,
+                "Facebook Published At": fb_time_str
+            })
 
         deleted = delete_github_release(release_id)
 
         update_cells(sheet, row_num, header_map, {
             "Status": "PUBLISHED",
-            "YouTube Status": "PUBLISHED",
-            "YouTube Video ID": yt_id,
-            "YouTube URL": yt_url,
-            "YouTube Published At": yt_time_str,
-            "Facebook Status": "PUBLISHED",
-            "Facebook Video ID": fb_id,
-            "Facebook URL": fb_url,
-            "Facebook Published At": fb_time_str,
             "Cleanup Status": "DELETED" if deleted else "PENDING",
             "Last Error": ""
         })
@@ -487,12 +537,8 @@ def main():
 
     for idx in range(1, len(all_rows)):
         row = all_rows[idx]
-        status = row[header_map["Status"] - 1].strip() if len(row) >= header_map["Status"] else ""
-        scheduled_val = (
-            row[header_map["Cleanup After"] - 1].strip()
-            if "Cleanup After" in header_map and len(row) >= header_map["Cleanup After"]
-            else ""
-        )
+        status = get_col_val(row, header_map, "Status")
+        scheduled_val = get_col_val(row, header_map, "Cleanup After")
 
         should_publish = False
         if status == "APPROVED":
