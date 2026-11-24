@@ -200,8 +200,7 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
     concat_list = os.path.join(work_dir, "audio_concat.txt")
     with open(concat_list, "w", encoding="utf-8") as f:
         for sf in segment_files:
-            f.write(f"file '{sf}'
-")
+            f.write(f"file '{sf}'\n")
 
     raw_concat_wav = os.path.join(work_dir, "voiceover_raw.wav")
     final_voice_wav = os.path.join(work_dir, "voiceover_full.wav")
@@ -322,11 +321,11 @@ def create_clean_subtitle_png(text: str, is_hook: bool, out_path: str):
     canvas_h = 380
     img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    
+
     font_size = 64 if is_hook else 52
     if len(text) > 40:
         font_size = 44
-        
+
     bn_font = find_font(BENGALI_FONT_PATHS, font_size)
     en_font = find_font(LATIN_FONT_PATHS, font_size - 4)
     lines = wrap_text_by_pixel(draw, text, bn_font, en_font, 900)
@@ -849,12 +848,9 @@ def build_subtitle_overlay_track(kinetic_segments: List[Dict], voice_dur: float,
 
     with open(concat_file, "w", encoding="utf-8") as f:
         for img_path, dur in entries:
-            f.write(f"file '{img_path}'
-")
-            f.write(f"duration {dur:.3f}
-")
-        f.write(f"file '{entries[-1][0]}'
-")
+            f.write(f"file '{img_path}'\n")
+            f.write(f"duration {dur:.3f}\n")
+        f.write(f"file '{entries[-1][0]}'\n")
 
     sub_mov = os.path.join(work_dir, "kinetic_track.mov")
     subprocess.run(
@@ -1050,16 +1046,10 @@ def send_telegram_for_approval(video_path: str, thumb_path: str, row_num: int, t
         raise RuntimeError("TELEGRAM_BOT_TOKEN বা TELEGRAM_CHAT_ID পাওয়া যায়নি।")
 
     caption = (
-        f"🎬 নতুন Bangla Shorts প্রস্তুত!
-
-"
-        f"📌 শিরোনাম: {title}
-"
-        f"🔗 পোস্ট: {post_url}
-"
-        f"📊 Sheet Row: {row_num}
-
-"
+        f"🎬 নতুন Bangla Shorts প্রস্তুত!\n\n"
+        f"📌 শিরোনাম: {title}\n"
+        f"🔗 পোস্ট: {post_url}\n"
+        f"📊 Sheet Row: {row_num}\n\n"
         f"💡 Approve দিলে ইনস্ট্যান্ট পোস্ট হবে, অথবা Schedule বাটনে সময় ঠিক করুন।"
     )
     reply_markup = json.dumps(
