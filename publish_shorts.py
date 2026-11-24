@@ -179,6 +179,19 @@ def set_facebook_reel_thumbnail(video_id, thumb_path):
     return False
 
 
+def remove_auto_captions(youtube, video_id):
+    """ইউটিউব কোনো অটো-জেনারেটেড ক্যাপশন ট্র্যাক তৈরি করলে তা মুছে ফেলে"""
+    try:
+        captions_resp = youtube.captions().list(part="snippet", videoId=video_id).execute()
+        for item in captions_resp.get("items", []):
+            snippet = item.get("snippet", {})
+            if snippet.get("trackKind") == "asr":
+                youtube.captions().delete(id=item["id"]).execute()
+                print(f"অটো-জেনারেটেড ক্যাপশন মুছে ফেলা হয়েছে: {item['id']}")
+    except Exception as e:
+        print(f"অটো-ক্যাপশন চেক সতর্কতা: {e}")
+
+
 def upload_to_youtube(video_path, seo_meta):
     if not YOUTUBE_OAUTH_TOKEN:
         raise ValueError("YOUTUBE_OAUTH_TOKEN পাওয়া যায়নি।")
@@ -195,7 +208,8 @@ def upload_to_youtube(video_path, seo_meta):
             "title": seo_meta["yt_title"],
             "description": seo_meta["yt_description"],
             "tags": seo_meta["yt_tags"],
-            "categoryId": "27"
+            "categoryId": "27",
+            "defaultAudioLanguage": "zxx"
         },
         "status": {
             "privacyStatus": "public",
@@ -213,6 +227,10 @@ def upload_to_youtube(video_path, seo_meta):
     yt_video_id = response["id"]
     yt_url = f"https://youtube.com/shorts/{yt_video_id}"
     print(f"YouTube Shorts আপলোড সফল: {yt_url}")
+
+    time.sleep(5)
+    remove_auto_captions(youtube, yt_video_id)
+
     return yt_video_id, yt_url
 
 
