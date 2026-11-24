@@ -412,7 +412,7 @@ def create_theme_matched_top_banner_png(out_path: str):
 
 
 def create_bottom_alternating_footer_mov(work_dir: str, out_mov: str):
-    """নিচের স্মার্ট অল্টারনেটিং ফুটার (কোনো বক্স চিহ্ন ছাড়া পরিচ্ছন্ন বাংলা ও ইংরেজি ফন্ট)"""
+    """নিচের স্মার্ট অল্টারনেটিং ফুটার"""
     w, h = 920, 96
     bn_font = find_font(BENGALI_FONT_PATHS, 34)
     en_font = find_font(LATIN_FONT_PATHS, 36)
@@ -503,6 +503,39 @@ def create_kinetic_typography_png(text: str, seg_idx: int, is_hook: bool, out_pa
     img.save(out_path, "PNG")
 
 
+def create_kinetic_track_mov(kinetic_segments: List[Dict], voice_dur: float, work_dir: str, out_mov: str):
+    """সবগুলো কাইনেটিক সাবটাইটেলকে একটি সিঙ্গেল ট্রান্সপারেন্ট ভিডিও ট্র্যাকে (10 FPS) রূপান্তর করে র‍্যাম সাশ্রয়"""
+    kin_fps = 10
+    total_frames = max(1, int(math.ceil(voice_dur * kin_fps)))
+    frames_dir = os.path.join(work_dir, "kin_frames")
+    os.makedirs(frames_dir, exist_ok=True)
+
+    blank_png = os.path.join(work_dir, "kin_blank.png")
+    Image.new("RGBA", (1040, 340), (0, 0, 0, 0)).save(blank_png, "PNG")
+
+    seg_pngs = []
+    for idx, seg in enumerate(kinetic_segments):
+        kp = os.path.join(work_dir, f"kin_{idx}.png")
+        create_kinetic_typography_png(seg["text"], idx, seg["is_hook"], kp)
+        seg_pngs.append((kp, seg["start"], seg["end"]))
+
+    for f_idx in range(total_frames):
+        t = f_idx / kin_fps
+        chosen_png = blank_png
+        for kp, st, en in seg_pngs:
+            if st <= t < en:
+                chosen_png = kp
+                break
+        os.symlink(chosen_png, os.path.join(frames_dir, f"kf_{f_idx:05d}.png"))
+
+    subprocess.run(
+        ["ffmpeg", "-y", "-framerate", str(kin_fps), "-i", os.path.join(frames_dir, "kf_%05d.png"), "-c:v", "png", out_mov],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def create_outro_card_png(out_path: str):
     """শেষ ৩.০ সেকেন্ডের প্রফেশনাল চ্যানেল আউট্রো কার্ড"""
     img = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (6, 78, 59, 255))
@@ -569,7 +602,7 @@ def capture_mobile_site_screenshot(post_url: str, out_png: str) -> int:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
             viewport={"width": 390, "height": 844},
-            device_scale_factor=2.8,
+            device_scale_factor=2.5,
             is_mobile=True,
             has_touch=True,
             user_agent="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
@@ -608,18 +641,19 @@ def capture_mobile_site_screenshot(post_url: str, out_png: str) -> int:
     return img.height
 
 
-def download_multiple_pixabay_clips(keywords: str, work_dir: str, max_clips: int = 4) -> List[str]:
+def download_and_prepare_pixabay_clips(keywords: str, work_dir: str, max_clips: int = 4) -> List[str]:
+    """4K ভিডিও এড়িয়ে medium/small ক্লিপ ডাউনলোড এবং র‍্যাম বাঁচাতে আগে থেকেই 1080x1920 সাইজে প্রি-প্রসেস"""
     api_key = os.environ.get("PIXABAY_API_KEY", "").strip()
     if not api_key:
         return []
     kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
     fallback_kws = ["smartphone typing", "office work", "digital technology", "bangladesh city"]
     search_kws = kw_list + fallback_kws
-    downloaded = []
+    prepared_clips = []
     seen_ids = set()
 
     for kw in search_kws:
-        if len(downloaded) >= max_clips:
+        if len(prepared_clips) >= max_clips:
             break
         try:
             url = f"https://pixabay.com/api/videos/?key={api_key}&q={requests.utils.quote(kw)}&per_page=8&safesearch=true"
@@ -627,23 +661,42 @@ def download_multiple_pixabay_clips(keywords: str, work_dir: str, max_clips: int
             hits = resp.get("hits", [])
             random.shuffle(hits)
             for hit in hits:
-                if len(downloaded) >= max_clips:
+                if len(prepared_clips) >= max_clips:
                     break
                 vid_id = hit.get("id")
                 if vid_id in seen_ids:
                     continue
                 videos = hit.get("videos", {})
-                vid_info = videos.get("large") or videos.get("medium") or videos.get("small")
+                # 4K ('large') এড়িয়ে 'medium' বা 'small' নেওয়া হচ্ছে যাতে র‍্যাম ওভারফ্লো না হয়
+                vid_info = videos.get("medium") or videos.get("small") or videos.get("tiny")
                 if vid_info and vid_info.get("url"):
-                    out_p = os.path.join(work_dir, f"stock_scene_{len(downloaded)}.mp4")
+                    raw_p = os.path.join(work_dir, f"raw_stock_{len(prepared_clips)}.mp4")
+                    norm_p = os.path.join(work_dir, f"norm_stock_{len(prepared_clips)}.mp4")
                     v_data = requests.get(vid_info["url"], timeout=45).content
-                    with open(out_p, "wb") as f:
+                    with open(raw_p, "wb") as f:
                         f.write(v_data)
-                    downloaded.append(out_p)
+
+                    # আগে থেকেই 1080x1920, 30fps, সর্বোচ্চ ১০ সেকেন্ডে রিসাইজ করে রাখা হচ্ছে
+                    subprocess.run(
+                        [
+                            "ffmpeg", "-y", "-threads", "2", "-i", raw_p,
+                            "-t", "10",
+                            "-vf", f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=increase,crop={VIDEO_WIDTH}:{VIDEO_HEIGHT},eq=brightness=-0.05:contrast=1.08",
+                            "-r", str(FPS), "-an",
+                            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+                            norm_p,
+                        ],
+                        check=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    if os.path.exists(raw_p):
+                        os.remove(raw_p)
+                    prepared_clips.append(norm_p)
                     seen_ids.add(vid_id)
         except Exception:
             continue
-    return downloaded
+    return prepared_clips
 
 
 def build_final_video(
@@ -668,57 +721,23 @@ def build_final_video(
     top_banner_png = os.path.join(work_dir, "top_theme_banner.png")
     outro_png = os.path.join(work_dir, "outro_card.png")
     footer_mov = os.path.join(work_dir, "alternating_footer.mov")
+    kinetic_mov = os.path.join(work_dir, "kinetic_track.mov")
 
     create_theme_matched_top_banner_png(top_banner_png)
     create_outro_card_png(outro_png)
     create_bottom_alternating_footer_mov(work_dir, footer_mov)
+    create_kinetic_track_mov(kinetic_segments, voice_dur, work_dir, kinetic_mov)
 
-    kin_pngs = []
-    for idx, seg in enumerate(kinetic_segments):
-        kp = os.path.join(work_dir, f"kin_{idx}.png")
-        create_kinetic_typography_png(seg["text"], idx, seg["is_hook"], kp)
-        kin_pngs.append((kp, seg["start"], seg["end"]))
-
-    inputs = [
-        "-loop", "1", "-t", f"{total_duration:.2f}", "-i", screenshot_png,
-        "-i", voice_wav,
-        "-loop", "1", "-t", f"{total_duration:.2f}", "-i", top_banner_png,
-        "-stream_loop", "-1", "-t", f"{total_duration:.2f}", "-i", footer_mov,
-        "-loop", "1", "-t", f"{total_duration:.2f}", "-i", outro_png,
-        "-loop", "1", "-t", f"{COVER_DURATION:.2f}", "-i", thumbnail_jpg,
-    ]
-
-    next_idx = 6
-    bgm_idx = None
-    if os.path.exists(BGM_FILE):
-        inputs.extend(["-stream_loop", "-1", "-t", f"{total_duration:.2f}", "-i", BGM_FILE])
-        bgm_idx = next_idx
-        next_idx += 1
-
-    logo_idx = None
-    if os.path.exists(LOGO_FILE):
-        inputs.extend(["-loop", "1", "-t", f"{total_duration:.2f}", "-i", LOGO_FILE])
-        logo_idx = next_idx
-        next_idx += 1
-
-    clip_indices = []
-    for cp in stock_clips:
-        if os.path.exists(cp):
-            inputs.extend(["-stream_loop", "-1", "-t", f"{total_duration:.2f}", "-i", cp])
-            clip_indices.append(next_idx)
-            next_idx += 1
-
-    kin_start_idx = next_idx
-    for kp, _, _ in kin_pngs:
-        inputs.extend(["-loop", "1", "-t", f"{total_duration:.2f}", "-i", kp])
-
+    # ব্যাকগ্রাউন্ড ও স্টক সিন আলাদাভাবে রেন্ডার করে র‍্যাম ব্যবহার একদম কমিয়ে আনা হচ্ছে
+    base_bg_mp4 = os.path.join(work_dir, "base_bg.mp4")
     scroll_dist = max(0, screenshot_h - VIDEO_HEIGHT)
-    filter_parts = []
-    filter_parts.append(
+
+    bg_inputs = ["-loop", "1", "-t", f"{voice_dur:.2f}", "-i", screenshot_png]
+    bg_filters = [
         f"[0:v]crop={VIDEO_WIDTH}:{VIDEO_HEIGHT}:0:'min({scroll_dist}, {scroll_dist}*(t/{max(1.0, voice_dur):.2f}))',"
         f"eq=brightness=-0.04:contrast=1.06[site_bg]"
-    )
-    last_v = "site_bg"
+    ]
+    last_bg = "site_bg"
 
     scene_windows = [
         (0.0, HOOK_DURATION),
@@ -727,28 +746,62 @@ def build_final_video(
         (29.0, voice_dur),
     ]
 
-    if clip_indices:
+    if stock_clips:
+        for idx, cp in enumerate(stock_clips):
+            bg_inputs.extend(["-stream_loop", "-1", "-t", f"{voice_dur:.2f}", "-i", cp])
+
         for s_i, (win_start, win_end) in enumerate(scene_windows):
             if win_start >= voice_dur:
                 break
             actual_end = min(win_end, voice_dur)
-            c_in = clip_indices[s_i % len(clip_indices)]
-            sc_lbl = f"scene_clip_{s_i}"
-            out_lbl = f"v_scene_{s_i}"
-            dur_span = max(1.0, actual_end - win_start)
-            filter_parts.append(
-                f"[{c_in}:v]scale=1160:2062:force_original_aspect_ratio=increase,"
-                f"crop=1160:2062,"
-                f"scale=w='trunc(1080*(1+0.05*sin(PI*(t-{win_start:.2f})/{dur_span:.2f}))/2)*2':h='trunc(1920*(1+0.05*sin(PI*(t-{win_start:.2f})/{dur_span:.2f}))/2)*2':eval=frame,"
-                f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT}:'(iw-{VIDEO_WIDTH})/2':'(ih-{VIDEO_HEIGHT})/2',"
-                f"eq=brightness=-0.05:contrast=1.08[{sc_lbl}]"
+            c_in = 1 + (s_i % len(stock_clips))
+            out_lbl = f"v_sc_{s_i}"
+            bg_filters.append(
+                f"[{last_bg}][{c_in}:v]overlay=0:0:enable='between(t,{win_start:.2f},{actual_end:.2f})'[{out_lbl}]"
             )
-            filter_parts.append(
-                f"[{last_v}][{sc_lbl}]overlay=0:0:enable='between(t,{win_start:.2f},{actual_end:.2f})'[{out_lbl}]"
-            )
-            last_v = out_lbl
+            last_bg = out_lbl
 
-    filter_parts.append(f"[{last_v}][2:v]overlay=0:0:enable='between(t,0,{voice_dur:.2f})'[v_banner]")
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-threads", "2", *bg_inputs,
+            "-filter_complex", ";".join(bg_filters),
+            "-map", f"[{last_bg}]",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p",
+            "-r", str(FPS), "-t", f"{voice_dur:.2f}", base_bg_mp4,
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    # ফাইনাল কম্পোজিটিং (মাত্র অল্প কয়েকটি ইনপুট দিয়ে)
+    inputs = [
+        "-i", base_bg_mp4,
+        "-i", voice_wav,
+        "-loop", "1", "-t", f"{total_duration:.2f}", "-i", top_banner_png,
+        "-stream_loop", "-1", "-t", f"{voice_dur:.2f}", "-i", footer_mov,
+        "-loop", "1", "-t", f"{total_duration:.2f}", "-i", outro_png,
+        "-loop", "1", "-t", f"{COVER_DURATION:.2f}", "-i", thumbnail_jpg,
+        "-i", kinetic_mov,
+    ]
+
+    next_idx = 7
+    bgm_idx = None
+    if os.path.exists(BGM_FILE):
+        inputs.extend(["-stream_loop", "-1", "-t", f"{total_duration:.2f}", "-i", BGM_FILE])
+        bgm_idx = next_idx
+        next_idx += 1
+
+    logo_idx = None
+    if os.path.exists(LOGO_FILE):
+        inputs.extend(["-loop", "1", "-t", f"{voice_dur:.2f}", "-i", LOGO_FILE])
+        logo_idx = next_idx
+        next_idx += 1
+
+    filter_parts = []
+    # base_bg_mp4 কে আউট্রো পর্যন্ত প্যাড করা হচ্ছে
+    filter_parts.append(f"[0:v]tpad=stop_mode=clone:stop_duration={OUTRO_DURATION:.2f}[v_base]")
+    filter_parts.append(f"[v_base][2:v]overlay=0:0:enable='between(t,0,{voice_dur:.2f})'[v_banner]")
     last_v = "v_banner"
 
     if logo_idx is not None:
@@ -760,16 +813,10 @@ def build_final_video(
         )
         last_v = "v_logo"
 
-    for i, (_, st, en) in enumerate(kin_pngs):
-        if st >= voice_dur:
-            break
-        actual_en = min(en, voice_dur)
-        k_in = kin_start_idx + i
-        out_lbl = f"v_kin{i}"
-        filter_parts.append(
-            f"[{last_v}][{k_in}:v]overlay=(W-w)/2:1260:enable='between(t,{st:.2f},{actual_en:.2f})'[{out_lbl}]"
-        )
-        last_v = out_lbl
+    filter_parts.append(
+        f"[{last_v}][6:v]overlay=(W-w)/2:1260:enable='between(t,0,{voice_dur:.2f})'[v_kin]"
+    )
+    last_v = "v_kin"
 
     filter_parts.append(
         f"[{last_v}][3:v]overlay=(W-w)/2:1680:enable='between(t,0,{voice_dur:.2f})'[v_footer]"
@@ -800,12 +847,11 @@ def build_final_video(
     else:
         filter_parts.append(f"[1:a]apad=pad_dur={OUTRO_DURATION:.2f}[a_final]")
 
-    filter_complex = ";".join(filter_parts)
     cmd = [
-        "ffmpeg", "-y", *inputs,
-        "-filter_complex", filter_complex,
+        "ffmpeg", "-y", "-threads", "2", *inputs,
+        "-filter_complex", ";".join(filter_parts),
         "-map", "[v_final]", "-map", "[a_final]",
-        "-c:v", "libx264", "-preset", "medium", "-crf", "22", "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-r", str(FPS),
         "-t", f"{total_duration:.2f}", output_mp4,
     ]
@@ -958,8 +1004,8 @@ def main():
             print("2. Generating studio-quality voiceover & kinetic segments...")
             voice_wav, kinetic_segments = generate_natural_voiceover(script, work_dir)
 
-            print("3. Fetching multiple action video clips...")
-            downloaded_clips = download_multiple_pixabay_clips(keywords, work_dir, max_clips=4)
+            print("3. Fetching & pre-processing action video clips...")
+            downloaded_clips = download_and_prepare_pixabay_clips(keywords, work_dir, max_clips=4)
 
             print("4. Generating attractive branded thumbnail...")
             create_thumbnail_jpg(yt_title, screenshot_png, downloaded_clips, thumb_jpg, work_dir)
