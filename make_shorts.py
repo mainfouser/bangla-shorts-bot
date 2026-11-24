@@ -114,7 +114,7 @@ async def _synthesize_phrase(text: str, out_path: str, rate: str, pitch: str):
     await communicate.save(out_path)
 
 
-def split_kinetic_chunks(sentence: str, max_chars: int = 28) -> List[str]:
+def split_kinetic_chunks(sentence: str, max_chars: int = 36) -> List[str]:
     words = sentence.split()
     chunks = []
     cur = []
@@ -171,7 +171,7 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
         sentence_start = current_time
         current_time += dur
 
-        chunks = split_kinetic_chunks(sentence, max_chars=28)
+        chunks = split_kinetic_chunks(sentence, max_chars=36)
         total_chars = sum(len(c) for c in chunks) or 1
         t_cursor = sentence_start
         for c_i, ch in enumerate(chunks):
@@ -200,7 +200,8 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
     concat_list = os.path.join(work_dir, "audio_concat.txt")
     with open(concat_list, "w", encoding="utf-8") as f:
         for sf in segment_files:
-            f.write(f"file '{sf}'\n")
+            f.write(f"file '{sf}'
+")
 
     raw_concat_wav = os.path.join(work_dir, "voiceover_raw.wav")
     final_voice_wav = os.path.join(work_dir, "voiceover_full.wav")
@@ -321,13 +322,17 @@ def create_clean_subtitle_png(text: str, is_hook: bool, out_path: str):
     canvas_h = 380
     img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    font_size = 64 if is_hook else 56
+    
+    font_size = 64 if is_hook else 52
+    if len(text) > 40:
+        font_size = 44
+        
     bn_font = find_font(BENGALI_FONT_PATHS, font_size)
     en_font = find_font(LATIN_FONT_PATHS, font_size - 4)
     lines = wrap_text_by_pixel(draw, text, bn_font, en_font, 900)
     if len(lines) > 3:
         lines = lines[:3]
-    line_h = font_size + 22
+    line_h = font_size + 20
     total_h = len(lines) * line_h
     start_y = (canvas_h - total_h) // 2
     max_line_w = max((measure_mixed_text_width(draw, ln, bn_font, en_font) for ln in lines), default=400)
@@ -844,9 +849,12 @@ def build_subtitle_overlay_track(kinetic_segments: List[Dict], voice_dur: float,
 
     with open(concat_file, "w", encoding="utf-8") as f:
         for img_path, dur in entries:
-            f.write(f"file '{img_path}'\n")
-            f.write(f"duration {dur:.3f}\n")
-        f.write(f"file '{entries[-1][0]}'\n")
+            f.write(f"file '{img_path}'
+")
+            f.write(f"duration {dur:.3f}
+")
+        f.write(f"file '{entries[-1][0]}'
+")
 
     sub_mov = os.path.join(work_dir, "kinetic_track.mov")
     subprocess.run(
@@ -957,11 +965,12 @@ def build_final_video(
         f"[v_outro][thumb_cover]overlay=0:0:enable='between(t,0,{COVER_DURATION:.2f})'[v_final]",
     ]
     if bgm_idx is not None:
-        fade_start = max(0.0, total_duration - 1.5)
+        fade_start = max(0.0, total_duration - 1.2)
+        outro_start = voice_dur
         f_parts.extend([
-            f"[{bgm_idx}:a]volume={BGM_VOLUME},afade=t=out:st={fade_start:.2f}:d=1.5[bgm_low]",
+            f"[{bgm_idx}:a]volume=eval=frame:volume='if(gte(t,{outro_start:.2f}),0.22,0.08)',afade=t=out:st={fade_start:.2f}:d=1.2[bgm_dynamic]",
             f"[1:a]apad=pad_dur={OUTRO_DURATION:.2f}[v_pad]",
-            f"[v_pad][bgm_low]amix=inputs=2:duration=first:dropout_transition=2[a_final]",
+            f"[v_pad][bgm_dynamic]amix=inputs=2:duration=first:dropout_transition=2[a_final]",
         ])
     else:
         f_parts.append(f"[1:a]apad=pad_dur={OUTRO_DURATION:.2f}[a_final]")
@@ -1041,10 +1050,16 @@ def send_telegram_for_approval(video_path: str, thumb_path: str, row_num: int, t
         raise RuntimeError("TELEGRAM_BOT_TOKEN বা TELEGRAM_CHAT_ID পাওয়া যায়নি।")
 
     caption = (
-        f"🎬 নতুন Bangla Shorts প্রস্তুত!\n\n"
-        f"📌 শিরোনাম: {title}\n"
-        f"🔗 পোস্ট: {post_url}\n"
-        f"📊 Sheet Row: {row_num}\n\n"
+        f"🎬 নতুন Bangla Shorts প্রস্তুত!
+
+"
+        f"📌 শিরোনাম: {title}
+"
+        f"🔗 পোস্ট: {post_url}
+"
+        f"📊 Sheet Row: {row_num}
+
+"
         f"💡 Approve দিলে ইনস্ট্যান্ট পোস্ট হবে, অথবা Schedule বাটনে সময় ঠিক করুন।"
     )
     reply_markup = json.dumps(
