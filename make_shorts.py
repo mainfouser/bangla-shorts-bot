@@ -548,7 +548,7 @@ def capture_mobile_site_screenshot(post_url: str, out_png: str) -> int:
 
 
 def download_multiple_pixabay_clips(keywords: str, work_dir: str, max_clips: int = 4) -> List[str]:
-    """সবচেয়ে প্রাসঙ্গিক টপ ভিডিও ক্লিপ ডাউনলোড করা (random.shuffle বাদ দেওয়া হয়েছে)"""
+    """সবচেয়ে প্রাসঙ্গিক টপ ভিডিও ক্লিপ ডাউনলোড করা"""
     api_key = os.environ.get("PIXABAY_API_KEY", "").strip()
     if not api_key:
         return []
