@@ -18,11 +18,15 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from playwright.sync_api import sync_playwright
 
 VOICE_NAME = "bn-BD-PradeepNeural"
+SECONDARY_VOICE_NAME = "bn-BD-NabanitaNeural"
 GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "mainfouser/bangla-shorts-bot")
 SHEET_NAME = "Shorts_Queue"
 BGM_FILE = "bgm.mp3"
 LOGO_FILE = "logo.png"
-BGM_VOLUME = 0.045
+
+# BGM volume: balanced so it stays audible under voiceover and rises gently in outro
+BGM_VOICE_VOLUME = 0.085
+BGM_OUTRO_VOLUME = 0.14
 
 VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920
@@ -30,7 +34,7 @@ FPS = 30
 MAX_SCROLL_PX = 2600
 HOOK_DURATION = 4.0
 COVER_DURATION = 0.35
-OUTRO_DURATION = 3.0
+OUTRO_DURATION = 4.5
 
 BENGALI_FONT_PATHS = [
     "/usr/share/fonts/truetype/noto/NotoSansBengali-Bold.ttf",
@@ -77,38 +81,148 @@ def get_google_sheet():
     return client.open_by_key(sheet_id).worksheet(SHEET_NAME)
 
 
+def _spell_domain_for_tts(domain_str: str) -> str:
+    parts = [p.strip() for p in domain_str.strip().split(".") if p.strip()]
+    if not parts:
+        return domain_str
+    spoken_parts = []
+    for part in parts:
+        low = part.lower()
+        if low == "www":
+            spoken_parts.append("ডাব্লিউ ডাব্লিউ ডাব্লিউ")
+        elif low == "gov":
+            spoken_parts.append("গভ")
+        elif low == "bd":
+            spoken_parts.append("বিডি")
+        elif low == "com":
+            spoken_parts.append("কম")
+        elif low == "org":
+            spoken_parts.append("ওআরজি")
+        elif low == "net":
+            spoken_parts.append("নেট")
+        elif low == "edu":
+            spoken_parts.append("ইডিইউ")
+        elif re.fullmatch(r"[a-z]{1,4}", low):
+            spoken_parts.append(" ".join(list(low)))
+        else:
+            spoken_parts.append(part)
+    return " ডট ".join(spoken_parts)
+
+
 def clean_voiceover_script(text: str) -> str:
     text = str(text or "").strip()
-    text = re.sub(r"হোম\s*বিডি\s*ইনফো\s*ডট\s*কম\s*\(?homebdinfo\.com\)?", "হোম বিডি ইনফো ডট কম", text, flags=re.IGNORECASE)
-    text = re.sub(r"homebdinfo\.com\s*\(?হোম\s*বিডি\s*ইনফো\s*ডট\s*কম\)?", "হোম বিডি ইনফো ডট কম", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"হোম\s*বিডি\s*ইনফো\s*ডট\s*কম\s*\(?homebdinfo\.com\)?",
+        "হোম বিডি ইনফো ডট কম",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"homebdinfo\.com\s*\(?হোম\s*বিডি\s*ইনফো\s*ডট\s*কম\)?",
+        "হোম বিডি ইনফো ডট কম",
+        text,
+        flags=re.IGNORECASE,
+    )
     text = re.sub(r"https?://(?:www\.)?homebdinfo\.com\S*", "হোম বিডি ইনফো ডট কম", text, flags=re.IGNORECASE)
     text = re.sub(r"(?:www\.)?homebdinfo\.com", "হোম বিডি ইনফো ডট কম", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s*—\s*", ", ", text)
+
+    def _replace_url(match):
+        raw_u = match.group(0)
+        cleaned_u = re.sub(r"^https?://", "", raw_u, flags=re.IGNORECASE)
+        host_and_path = cleaned_u.split("/", 1)
+        host_spoken = _spell_domain_for_tts(host_and_path[0])
+        if len(host_and_path) > 1 and host_and_path[1].strip():
+            return f"{host_spoken} পোর্টাল"
+        return host_spoken
+
+    text = re.sub(r"https?://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=]+", _replace_url, text)
+    text = re.sub(
+        r"\b(?:[a-z0-9-]+\.)+(?:gov\.bd|com\.bd|org\.bd|edu\.bd|bd|com|org|net|info)\b",
+        lambda m: _spell_domain_for_tts(m.group(0)),
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    text = re.sub(r"\s*[—–-]\s*", ", ", text)
+    text = re.sub(r"\s*:\s*", ": ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
 
-def split_sentences_for_tts(script: str) -> List[str]:
-    parts = [p.strip() for p in re.split(r"(?<=[।!?\.])\s+", script) if p.strip()]
-    return parts if parts else [script]
+def split_clauses_for_tts(script: str) -> List[Dict]:
+    # Split by major sentence delimiters first, then break long clauses on commas/semicolons
+    raw_sentences = [p.strip() for p in re.split(r"(?<=[।!?\.])\s+", script) if p.strip()]
+    if not raw_sentences:
+        raw_sentences = [script]
+
+    clauses = []
+    total_s = len(raw_sentences)
+    for s_idx, sent in enumerate(raw_sentences):
+        sub_parts = [sp.strip() for sp in re.split(r"(?<=[,;:])\s+", sent) if sp.strip()]
+        if not sub_parts:
+            sub_parts = [sent]
+
+        # Merge tiny trailing fragments into previous clause to avoid choppy TTS
+        merged = []
+        for sp in sub_parts:
+            if merged and len(sp) < 10:
+                merged[-1] = f"{merged[-1]} {sp}".strip()
+            else:
+                merged.append(sp)
+
+        for c_idx, clause_txt in enumerate(merged):
+            is_sentence_end = (c_idx == len(merged) - 1)
+            clauses.append(
+                {
+                    "text": clause_txt,
+                    "sent_idx": s_idx,
+                    "total_sents": total_s,
+                    "is_hook": (s_idx == 0 and c_idx == 0),
+                    "is_sentence_end": is_sentence_end,
+                }
+            )
+    return clauses
 
 
-def get_natural_prosody(sentence: str, idx: int, total: int) -> Tuple[str, str, float]:
-    if idx == 0:
-        return "-4%", "+0Hz", 0.35
-    if "?" in sentence or any(w in sentence for w in ["কীভাবে", "কেন", "কী", "কত", "কখন"]):
-        return "-5%", "+1Hz", 0.38
-    if any(w in sentence for w in ["সতর্ক", "জরুরি", "অবশ্যই", "মনে রাখবেন", "ভুল", "আইন", "ধাপ"]):
-        return "-7%", "-1Hz", 0.35
-    if idx == total - 1:
-        return "-6%", "-1Hz", 0.42
-    if idx % 2 == 1:
-        return "-5%", "+0Hz", 0.32
-    return "-6%", "+0Hz", 0.34
+def get_expressive_prosody(clause_info: Dict) -> Tuple[str, str, float]:
+    txt = clause_info["text"]
+    s_idx = clause_info["sent_idx"]
+    total_s = clause_info["total_sents"]
+    is_hook = clause_info["is_hook"]
+    is_end = clause_info["is_sentence_end"]
+
+    # Base pause: slightly longer at full sentence end, shorter at mid-sentence comma pause
+    pause = 0.42 if is_end else 0.18
+
+    if is_hook:
+        return "+2%", "+4Hz", 0.40
+
+    if "?" in txt or any(w in txt for w in ["কীভাবে", "কেন", "কী", "কত", "কখন", "আদৌ"]):
+        return "+1%", "+5Hz", pause + 0.05
+
+    if any(w in txt for w in ["সতর্ক", "জরুরি", "অবশ্যই", "মনে রাখবেন", "ভুল", "জরিমানা", "আইন", "নিষেধ", "বাতিল"]):
+        return "-8%", "-2Hz", pause + 0.06
+
+    if any(w in txt for w in ["প্রথম", "দ্বিতীয়", "তৃতীয়", "ধাপ", "ক্যাটাগরি", "সবুজ", "হলুদ", "কমলা", "লাল"]):
+        return "-5%", "+2Hz", pause + 0.04
+
+    if s_idx >= max(1, total_s - 1) and is_end:
+        return "-7%", "-2Hz", 0.48
+
+    # Alternating natural cadence across clauses so pitch never stays flat
+    pattern_idx = (s_idx + (0 if is_end else 1)) % 4
+    if pattern_idx == 0:
+        return "-3%", "+2Hz", pause
+    elif pattern_idx == 1:
+        return "-6%", "-1Hz", pause
+    elif pattern_idx == 2:
+        return "-2%", "+3Hz", pause
+    else:
+        return "-5%", "+0Hz", pause
 
 
-async def _synthesize_phrase(text: str, out_path: str, rate: str, pitch: str):
-    communicate = edge_tts.Communicate(text=text, voice=VOICE_NAME, rate=rate, pitch=pitch)
+async def _synthesize_phrase(text: str, out_path: str, rate: str, pitch: str, voice: str = VOICE_NAME):
+    communicate = edge_tts.Communicate(text=text, voice=voice, rate=rate, pitch=pitch)
     await communicate.save(out_path)
 
 
@@ -132,20 +246,20 @@ def split_kinetic_chunks(sentence: str, max_chars: int = 36) -> List[str]:
 
 def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Dict]]:
     cleaned = clean_voiceover_script(script)
-    sentences = split_sentences_for_tts(cleaned)
-    total = len(sentences)
+    clauses = split_clauses_for_tts(cleaned)
 
     segment_files = []
     kinetic_segments = []
     current_time = 0.0
 
-    for idx, sentence in enumerate(sentences):
-        rate, pitch, end_pause = get_natural_prosody(sentence, idx, total)
+    for idx, c_info in enumerate(clauses):
+        clause_text = c_info["text"]
+        rate, pitch, end_pause = get_expressive_prosody(c_info)
 
         raw_mp3 = os.path.join(work_dir, f"tts_{idx}.mp3")
         wav_seg = os.path.join(work_dir, f"tts_{idx}.wav")
 
-        asyncio.run(_synthesize_phrase(sentence, raw_mp3, rate, pitch))
+        asyncio.run(_synthesize_phrase(clause_text, raw_mp3, rate, pitch, voice=VOICE_NAME))
 
         subprocess.run(
             ["ffmpeg", "-y", "-threads", "2", "-i", raw_mp3, "-ar", "44100", "-ac", "2", wav_seg],
@@ -157,7 +271,10 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
             os.remove(raw_mp3)
 
         probe = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", wav_seg],
+            [
+                "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", wav_seg,
+            ],
             capture_output=True,
             text=True,
             check=True,
@@ -165,12 +282,12 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
         dur = float(probe.stdout.strip())
         segment_files.append(wav_seg)
 
-        sentence_start = current_time
+        clause_start = current_time
         current_time += dur
 
-        chunks = split_kinetic_chunks(sentence, max_chars=36)
+        chunks = split_kinetic_chunks(clause_text, max_chars=36)
         total_chars = sum(len(c) for c in chunks) or 1
-        t_cursor = sentence_start
+        t_cursor = clause_start
         for c_i, ch in enumerate(chunks):
             ch_dur = dur * (len(ch) / total_chars)
             kinetic_segments.append(
@@ -178,7 +295,7 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
                     "text": ch,
                     "start": t_cursor,
                     "end": t_cursor + ch_dur + (end_pause if c_i == len(chunks) - 1 else 0.0),
-                    "is_hook": (idx == 0),
+                    "is_hook": (c_info["is_hook"] and c_i == 0),
                 }
             )
             t_cursor += ch_dur
@@ -186,7 +303,10 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
         if end_pause > 0:
             sil_wav = os.path.join(work_dir, f"sil_{idx}.wav")
             subprocess.run(
-                ["ffmpeg", "-y", "-threads", "2", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", f"{end_pause:.2f}", sil_wav],
+                [
+                    "ffmpeg", "-y", "-threads", "2", "-f", "lavfi",
+                    "-i", "anullsrc=r=44100:cl=stereo", "-t", f"{end_pause:.2f}", sil_wav,
+                ],
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -212,7 +332,12 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
     subprocess.run(
         [
             "ffmpeg", "-y", "-threads", "2", "-i", raw_concat_wav,
-            "-af", "highpass=f=80,equalizer=f=220:t=q:w=1.0:g=2.5,equalizer=f=3000:t=q:w=1.4:g=2.0,acompressor=threshold=-18dB:ratio=2.8:attack=6:release=70,loudnorm=I=-15:TP=-1.5:LRA=11",
+            "-af", (
+                "highpass=f=85,equalizer=f=210:t=q:w=1.0:g=2.8,"
+                "equalizer=f=3200:t=q:w=1.4:g=2.2,"
+                "acompressor=threshold=-17dB:ratio=2.5:attack=6:release=80,"
+                "loudnorm=I=-15:TP=-1.5:LRA=11"
+            ),
             "-ar", "44100", "-ac", "2", final_voice_wav,
         ],
         check=True,
@@ -292,7 +417,13 @@ def create_minimal_watermark_png(out_path: str):
     w, h = 460, 88
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    draw.rounded_rectangle([4, 8, w - 4, h - 8], radius=38, fill=(6, 45, 34, 210), outline=(250, 204, 21, 210), width=2)
+    draw.rounded_rectangle(
+        [4, 8, w - 4, h - 8],
+        radius=38,
+        fill=(6, 45, 34, 210),
+        outline=(250, 204, 21, 210),
+        width=2,
+    )
     text_x = 28
     if os.path.exists(LOGO_FILE):
         try:
@@ -398,7 +529,11 @@ def create_thumbnail_jpg(
     ov_draw = ImageDraw.Draw(overlay)
     for y in range(VIDEO_HEIGHT):
         ratio = y / VIDEO_HEIGHT
-        alpha = int(200 - (ratio / 0.25) * 55) if ratio < 0.25 else (int(145 + ((ratio - 0.65) / 0.35) * 85) if ratio > 0.65 else 150)
+        alpha = (
+            int(200 - (ratio / 0.25) * 55)
+            if ratio < 0.25
+            else (int(145 + ((ratio - 0.65) / 0.35) * 85) if ratio > 0.65 else 150)
+        )
         ov_draw.line([(0, y), (VIDEO_WIDTH, y)], fill=(6, 35, 27, alpha))
     canvas = Image.alpha_composite(canvas, overlay)
     draw = ImageDraw.Draw(canvas)
@@ -428,7 +563,13 @@ def create_thumbnail_jpg(
     box_h = len(lines) * line_h + box_pad_y * 2
     box_y0 = max(top_y + 60, (VIDEO_HEIGHT - box_h) // 2)
     box_y1 = box_y0 + box_h
-    draw.rounded_rectangle([48, box_y0, VIDEO_WIDTH - 48, box_y1], radius=34, fill=(6, 65, 49, 230), outline=(250, 204, 21, 240), width=4)
+    draw.rounded_rectangle(
+        [48, box_y0, VIDEO_WIDTH - 48, box_y1],
+        radius=34,
+        fill=(6, 65, 49, 230),
+        outline=(250, 204, 21, 240),
+        width=4,
+    )
 
     for idx, ln in enumerate(lines):
         lw = measure_mixed_text_width(draw, ln, bn_title_font, en_title_font)
@@ -440,6 +581,14 @@ def create_thumbnail_jpg(
     canvas.convert("RGB").save(out_jpg, "JPEG", quality=92)
     del canvas, overlay, bg_img
     gc.collect()
+
+
+def _elastic_ease_out(x: float) -> float:
+    x = max(0.0, min(1.0, x))
+    if x == 0.0 or x == 1.0:
+        return x
+    c4 = (2.0 * math.pi) / 3.0
+    return (2.0 ** (-10.0 * x)) * math.sin((x * 10.0 - 0.75) * c4) + 1.0
 
 
 def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUTRO_DURATION):
@@ -454,87 +603,131 @@ def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUT
         except Exception:
             logo_src = None
 
-    bn_h1 = find_font(BENGALI_FONT_PATHS, 52)
-    en_h1 = find_font(LATIN_FONT_PATHS, 48)
+    bn_h1 = find_font(BENGALI_FONT_PATHS, 54)
+    en_h1 = find_font(LATIN_FONT_PATHS, 50)
     bn_btn = find_font(BENGALI_FONT_PATHS, 38)
     en_btn = find_font(LATIN_FONT_PATHS, 36)
-    bn_sub = find_font(BENGALI_FONT_PATHS, 35)
-    en_sub = find_font(LATIN_FONT_PATHS, 35)
-    bn_dom = find_font(BENGALI_FONT_PATHS, 42)
-    en_dom = find_font(LATIN_FONT_PATHS, 44)
+    bn_sub = find_font(BENGALI_FONT_PATHS, 36)
+    en_sub = find_font(LATIN_FONT_PATHS, 36)
+    bn_dom = find_font(BENGALI_FONT_PATHS, 44)
+    en_dom = find_font(LATIN_FONT_PATHS, 46)
 
     for f_idx in range(n_frames):
         t = f_idx / FPS
-        p_fast = min(1.0, t / 0.55)
+
+        # Staggered elastic & cubic animations across 4.5s outro
+        p_logo = min(1.0, t / 0.70)
+        logo_pop = _elastic_ease_out(p_logo)
+
+        p_fast = min(1.0, max(0.0, (t - 0.25) / 0.55))
         ease_fast = 1.0 - (1.0 - p_fast) ** 3
 
-        p_mid = min(1.0, max(0.0, (t - 0.18) / 0.65))
-        ease_mid = 1.0 - (1.0 - p_mid) ** 3
+        p_mid = min(1.0, max(0.0, (t - 0.55) / 0.65))
+        ease_mid = _elastic_ease_out(p_mid)
 
-        p_slow = min(1.0, max(0.0, (t - 0.38) / 0.70))
+        p_slow = min(1.0, max(0.0, (t - 0.90) / 0.70))
         ease_slow = 1.0 - (1.0 - p_slow) ** 3
 
-        pulse = 1.0 + 0.035 * math.sin(2.0 * math.pi * 1.4 * t)
+        p_dom = min(1.0, max(0.0, (t - 1.25) / 0.70))
+        ease_dom = _elastic_ease_out(p_dom)
+
+        pulse = 1.0 + 0.04 * math.sin(2.0 * math.pi * 1.35 * t)
+        cta_wave = 1.0 + 0.03 * math.sin(2.0 * math.pi * 1.8 * max(0.0, t - 0.8))
+        dom_glow_alpha = int(140 + 85 * math.sin(2.0 * math.pi * 1.6 * t))
 
         img = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (5, 48, 37, 255))
         draw = ImageDraw.Draw(img)
 
-        glow_r = int(260 + 28 * math.sin(2.0 * math.pi * 1.2 * t))
-        cx, cy_center = VIDEO_WIDTH // 2, 470
-        draw.ellipse([cx - glow_r, cy_center - glow_r, cx + glow_r, cy_center + glow_r], fill=(16, 185, 129, 28))
+        # Animated ambient radial glow behind logo
+        glow_r = int(280 + 38 * math.sin(2.0 * math.pi * 1.15 * t))
+        cx, cy_center = VIDEO_WIDTH // 2, 450
+        draw.ellipse(
+            [cx - glow_r, cy_center - glow_r, cx + glow_r, cy_center + glow_r],
+            fill=(16, 185, 129, 34),
+        )
+        outer_r = int(glow_r * 1.22)
+        draw.ellipse(
+            [cx - outer_r, cy_center - outer_r, cx + outer_r, cy_center + outer_r],
+            outline=(250, 204, 21, 55),
+            width=3,
+        )
 
-        cy = 340
+        cy = 320
         if logo_src is not None:
-            lw = int(210 * pulse)
-            lh = max(1, int(logo_src.height * (lw / logo_src.width)))
+            logo_scale = max(0.2, logo_pop) * pulse
+            lw = max(24, int(215 * logo_scale))
+            lh = max(24, int(logo_src.height * (lw / logo_src.width)))
             resized_logo = logo_src.resize((lw, lh), Image.Resampling.LANCZOS)
-            ring_pad = int(22 * pulse)
+            ring_pad = int(24 * pulse)
             draw.ellipse(
-                [(VIDEO_WIDTH - lw) // 2 - ring_pad, cy - ring_pad, (VIDEO_WIDTH + lw) // 2 + ring_pad, cy + lh + ring_pad],
+                [
+                    (VIDEO_WIDTH - lw) // 2 - ring_pad,
+                    cy + (215 - lh) // 2 - ring_pad,
+                    (VIDEO_WIDTH + lw) // 2 + ring_pad,
+                    cy + (215 - lh) // 2 + lh + ring_pad,
+                ],
                 fill=(255, 255, 255, 255),
                 outline=(250, 204, 21, 255),
-                width=5,
+                width=6,
             )
-            img.paste(resized_logo, ((VIDEO_WIDTH - lw) // 2, cy), resized_logo)
-            cy += lh + 64
+            img.paste(resized_logo, ((VIDEO_WIDTH - lw) // 2, cy + (215 - lh) // 2), resized_logo)
+            cy += 215 + 66
 
         h1 = "তথ্যটি উপকারী মনে হলে"
         w1 = measure_mixed_text_width(draw, h1, bn_h1, en_h1)
-        h1_y = int(cy + (1.0 - ease_fast) * 45)
-        render_mixed_text_line(draw, (VIDEO_WIDTH - w1) // 2, h1_y, h1, bn_h1, en_h1, fill=(255, 255, 255, 255))
+        h1_y = int(cy + (1.0 - ease_fast) * 50)
+        h1_col = (255, 255, 255, int(60 + 195 * ease_fast))
+        render_mixed_text_line(draw, (VIDEO_WIDTH - w1) // 2, h1_y, h1, bn_h1, en_h1, fill=h1_col)
 
-        cy += 88
-        btn_w, btn_h = 840, 106
-        btn_scale = 0.88 + 0.12 * ease_mid + 0.02 * math.sin(2.0 * math.pi * 2.0 * t)
+        cy += 92
+        btn_w, btn_h = 860, 110
+        btn_scale = (0.75 + 0.25 * max(0.0, ease_mid)) * cta_wave
         cur_bw = int(btn_w * btn_scale)
         cur_bh = int(btn_h * btn_scale)
         bx0 = (VIDEO_WIDTH - cur_bw) // 2
-        by0 = int(cy + (1.0 - ease_mid) * 60 + (btn_h - cur_bh) // 2)
+        by0 = int(cy + (1.0 - min(1.0, ease_mid)) * 55 + (btn_h - cur_bh) // 2)
         draw.rounded_rectangle(
             [bx0, by0, bx0 + cur_bw, by0 + cur_bh],
-            radius=max(10, cur_bh // 2),
+            radius=max(12, cur_bh // 2),
             fill=(220, 38, 38, 255),
-            outline=(250, 204, 21, 230),
-            width=3,
+            outline=(250, 204, 21, 245),
+            width=4,
         )
         btn_txt = "♥ লাইক  •  💬 কমেন্ট  •  ➤ শেয়ার  •  + ফলো"
         bw = measure_mixed_text_width(draw, btn_txt, bn_btn, en_btn)
-        render_mixed_text_line(draw, (VIDEO_WIDTH - bw) // 2, by0 + (cur_bh - 42) // 2, btn_txt, bn_btn, en_btn, fill=(255, 255, 255, 255))
+        render_mixed_text_line(
+            draw, (VIDEO_WIDTH - bw) // 2, by0 + (cur_bh - 42) // 2, btn_txt, bn_btn, en_btn, fill=(255, 255, 255, 255)
+        )
 
-        cy += 165
+        cy += 172
         sub_txt = "বিস্তারিত গাইড ও আবেদন লিংক পেতে ভিজিট করুন:"
         sw = measure_mixed_text_width(draw, sub_txt, bn_sub, en_sub)
-        sub_y = int(cy + (1.0 - ease_slow) * 45)
+        sub_y = int(cy + (1.0 - ease_slow) * 48)
         render_mixed_text_line(draw, (VIDEO_WIDTH - sw) // 2, sub_y, sub_txt, bn_sub, en_sub, fill=(250, 204, 21, 255))
 
-        cy += 74
-        dw, dh = 690, 98
-        dx0 = (VIDEO_WIDTH - dw) // 2
-        dy0 = int(cy + (1.0 - ease_slow) * 50)
-        draw.rounded_rectangle([dx0, dy0, dx0 + dw, dy0 + dh], radius=49, fill=(16, 185, 129, 255), outline=(255, 255, 255, 180), width=2)
+        cy += 78
+        dw, dh = 710, 104
+        dom_scale = 0.8 + 0.2 * max(0.0, ease_dom)
+        cur_dw = int(dw * dom_scale)
+        cur_dh = int(dh * dom_scale)
+        dx0 = (VIDEO_WIDTH - cur_dw) // 2
+        dy0 = int(cy + (1.0 - min(1.0, ease_dom)) * 50 + (dh - cur_dh) // 2)
+        draw.rounded_rectangle(
+            [dx0 - 6, dy0 - 6, dx0 + cur_dw + 6, dy0 + cur_dh + 6],
+            radius=max(14, (cur_dh + 12) // 2),
+            outline=(250, 204, 21, dom_glow_alpha),
+            width=4,
+        )
+        draw.rounded_rectangle(
+            [dx0, dy0, dx0 + cur_dw, dy0 + cur_dh],
+            radius=max(12, cur_dh // 2),
+            fill=(16, 185, 129, 255),
+            outline=(255, 255, 255, 210),
+            width=3,
+        )
         dom_txt = "homebdinfo.com"
         dom_w = measure_mixed_text_width(draw, dom_txt, bn_dom, en_dom)
-        render_mixed_text_line(draw, (VIDEO_WIDTH - dom_w) // 2, dy0 + 22, dom_txt, bn_dom, en_dom, fill=(255, 255, 255, 255))
+        render_mixed_text_line(draw, (VIDEO_WIDTH - dom_w) // 2, dy0 + 24, dom_txt, bn_dom, en_dom, fill=(255, 255, 255, 255))
 
         frame_path = os.path.join(frames_dir, f"outro_{f_idx:04d}.png")
         img.convert("RGB").save(frame_path, "PNG")
@@ -931,7 +1124,10 @@ def build_final_video(
     work_dir: str,
 ):
     probe = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", voice_wav],
+        [
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", voice_wav,
+        ],
         capture_output=True,
         text=True,
         check=True,
@@ -1015,11 +1211,14 @@ def build_final_video(
         f"[v_outro][thumb_cover]overlay=0:0:enable='between(t,0,{COVER_DURATION:.2f})'[v_final]",
     ]
     if bgm_idx is not None:
-        fade_out_start = max(0.0, voice_dur - 1.0)
+        fade_out_start = max(0.0, total_duration - 1.2)
+        # Split BGM into voiceover bed (BGM_VOICE_VOLUME) and outro swell (BGM_OUTRO_VOLUME)
         f_parts.extend([
-            f"[{bgm_idx}:a]volume=0.045,atrim=0:{voice_dur:.2f},afade=t=out:st={fade_out_start:.2f}:d=1.0,apad=pad_dur={OUTRO_DURATION:.2f}[bgm_clean]",
+            f"[{bgm_idx}:a]atrim=0:{voice_dur:.2f},volume={BGM_VOICE_VOLUME},afade=t=in:st=0:d=0.6[bgm_body]",
+            f"[{bgm_idx}:a]atrim={voice_dur:.2f}:{total_duration:.2f},asetpts=PTS-STARTPTS,volume={BGM_OUTRO_VOLUME},afade=t=out:st={max(0.0, OUTRO_DURATION - 1.2):.2f}:d=1.2[bgm_outro]",
+            f"[bgm_body][bgm_outro]concat=n=2:v=0:a=1[bgm_clean]",
             f"[1:a]apad=pad_dur={OUTRO_DURATION:.2f}[v_pad]",
-            f"[v_pad][bgm_clean]amix=inputs=2:duration=first:dropout_transition=2[a_final]",
+            f"[v_pad][bgm_clean]amix=inputs=2:duration=first:weights='1.0 1.0':dropout_transition=2,volume=1.15[a_final]",
         ])
     else:
         f_parts.append(f"[1:a]apad=pad_dur={OUTRO_DURATION:.2f}[a_final]")
@@ -1222,8 +1421,9 @@ def main():
             print("3. Preparing universal topic-relevant visual clips...")
             visual_clips = list(article_clips)
             if len(visual_clips) < 2:
-                bullets = article_headings if len(article_headings) >= 2 else split_sentences_for_tts(clean_voiceover_script(script))[1:4]
-                info_card_clip = create_dynamic_topic_graphic_clip(yt_title, bullets, work_dir, len(visual_clips))
+                bullets = article_headings if len(article_headings) >= 2 else split_clauses_for_tts(clean_voiceover_script(script))[1:4]
+                bullet_texts = [b["text"] if isinstance(b, dict) else str(b) for b in bullets]
+                info_card_clip = create_dynamic_topic_graphic_clip(yt_title, bullet_texts, work_dir, len(visual_clips))
                 if info_card_clip:
                     visual_clips.append(info_card_clip)
 
