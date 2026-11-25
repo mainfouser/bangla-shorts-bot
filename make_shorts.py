@@ -5,7 +5,6 @@ import json
 import math
 import time
 import asyncio
-import random
 import tempfile
 import subprocess
 from urllib.parse import urljoin
@@ -95,7 +94,6 @@ def split_sentences_for_tts(script: str) -> List[str]:
 
 
 def get_natural_prosody(sentence: str, idx: int, total: int) -> Tuple[str, str, float]:
-    """বাক্যের ধরন অনুযায়ী স্বাভাবিক, ধীর ও রোবটিক-মুক্ত গতি, পিচ ও বিরতি নির্ধারণ"""
     if idx == 0:
         return "-4%", "+0Hz", 0.35
     if "?" in sentence or any(w in sentence for w in ["কীভাবে", "কেন", "কী", "কত", "কখন"]):
@@ -133,7 +131,6 @@ def split_kinetic_chunks(sentence: str, max_chars: int = 36) -> List[str]:
 
 
 def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Dict]]:
-    """কমার জায়গায় না ভেঙে পুরো বাক্য একসাথে জেনারেট করে স্বাভাবিক ফ্লো বজায় রাখা"""
     cleaned = clean_voiceover_script(script)
     sentences = split_sentences_for_tts(cleaned)
     total = len(sentences)
@@ -292,7 +289,6 @@ def wrap_text_by_pixel(
 
 
 def create_minimal_watermark_png(out_path: str):
-    """উপরের বাম কোণায় পরিচ্ছন্ন ব্র্যান্ড ওয়াটারমার্ক পিল"""
     w, h = 460, 88
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -316,7 +312,6 @@ def create_minimal_watermark_png(out_path: str):
 
 
 def create_clean_subtitle_png(text: str, is_hook: bool, out_path: str):
-    """নিচের নিরাপদ জোনে (Shorts UI এড়িয়ে) স্পষ্ট পড়ার জন্য সেমি-ট্রান্সপারেন্ট ডার্ক কার্ডসহ সাবটাইটেল"""
     canvas_w = 1040
     canvas_h = 340
     img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
@@ -448,7 +443,6 @@ def create_thumbnail_jpg(
 
 
 def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUTRO_DURATION):
-    """শেষ ৩.০ সেকেন্ডের প্রফেশনাল অ্যানিমেটেড আউট্রো (লোগো পালস, লাইক/কমেন্ট/শেয়ার/ফলো কার্ড স্লাইড-ইন ও গ্লো)"""
     frames_dir = os.path.join(work_dir, "outro_frames")
     os.makedirs(frames_dir, exist_ok=True)
     n_frames = max(1, int(round(duration * FPS)))
@@ -471,7 +465,6 @@ def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUT
 
     for f_idx in range(n_frames):
         t = f_idx / FPS
-        # Smooth ease-out progress for entrance animations
         p_fast = min(1.0, t / 0.55)
         ease_fast = 1.0 - (1.0 - p_fast) ** 3
 
@@ -486,7 +479,6 @@ def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUT
         img = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (5, 48, 37, 255))
         draw = ImageDraw.Draw(img)
 
-        # Subtle decorative radial glow rings
         glow_r = int(260 + 28 * math.sin(2.0 * math.pi * 1.2 * t))
         cx, cy_center = VIDEO_WIDTH // 2, 470
         draw.ellipse([cx - glow_r, cy_center - glow_r, cx + glow_r, cy_center + glow_r], fill=(16, 185, 129, 28))
@@ -574,7 +566,6 @@ def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUT
 
 
 def _encode_lightweight_motion_clip(image_path: str, out_mp4: str, duration: int = 8):
-    """GitHub Actions-এর RAM সুরক্ষিত রেখে স্মুথ জুম-ইন মোশন গ্রাফিক্স ক্লিপ তৈরি করে (zoompan ছাড়াই)"""
     subprocess.run(
         [
             "ffmpeg", "-y", "-threads", "2", "-loop", "1", "-t", str(duration), "-i", image_path,
@@ -597,7 +588,6 @@ def create_dynamic_topic_graphic_clip(
     work_dir: str,
     clip_idx: int,
 ) -> Optional[str]:
-    """যেকোনো আর্টিকেলের শিরোনাম ও মূল পয়েন্ট দিয়ে প্রাসঙ্গিক ইনফো-মোশন গ্রাফিক্স কার্ড তৈরি করে"""
     try:
         card_png = os.path.join(work_dir, f"motion_card_{clip_idx}.png")
         clip_mp4 = os.path.join(work_dir, f"motion_card_{clip_idx}.mp4")
@@ -667,7 +657,6 @@ def create_dynamic_topic_graphic_clip(
 
 
 def capture_site_and_extract_images(post_url: str, out_png: str, work_dir: str) -> Tuple[int, List[str], List[str]]:
-    """সব অ্যাড রিমুভ করে ঝকঝকে স্ক্রিনশট নেয়, আর্টিকেলের ছবি ও মূল হেডিংগুলো সংগ্রহ করে"""
     target_url = post_url if post_url.startswith("http") else "https://homebdinfo.com"
     image_urls = []
     article_headings = []
@@ -818,7 +807,6 @@ def capture_site_and_extract_images(post_url: str, out_png: str, work_dir: str) 
 
 
 def download_relevant_stock_clips(keywords: str, work_dir: str, max_clips: int = 2) -> List[str]:
-    """যেকোনো আর্টিকেলের ইংরেজি কিওয়ার্ড অনুযায়ী প্রাসঙ্গিক ও পরিচ্ছন্ন স্টক ফুটেজ আনে"""
     if max_clips <= 0:
         return []
     api_key = os.environ.get("PIXABAY_API_KEY", "").strip()
@@ -886,7 +874,6 @@ def download_relevant_stock_clips(keywords: str, work_dir: str, max_clips: int =
 
 
 def build_subtitle_overlay_track(kinetic_segments: List[Dict], voice_dur: float, work_dir: str) -> str:
-    """সব সাবটাইটেলকে একটি হালকা ট্রান্সপারেন্ট ভিডিও ট্র্যাকে রূপান্তর"""
     sub_dir = os.path.join(work_dir, "sub_frames")
     os.makedirs(sub_dir, exist_ok=True)
     blank_png = os.path.join(sub_dir, "blank.png")
@@ -1018,7 +1005,6 @@ def build_final_video(
         final_inputs.extend(["-stream_loop", "-1", "-t", f"{total_duration:.2f}", "-i", BGM_FILE])
         bgm_idx = 6
 
-    # Subtitle positioned in lower-safe area (y=1340) so visual content stays open and Shorts UI buttons are clear
     f_parts = [
         f"[0:v]tpad=stop_mode=clone:stop_duration={OUTRO_DURATION:.2f}[v_base]",
         f"[v_base][2:v]overlay=32:48:enable='between(t,0,{voice_dur:.2f})'[v_wm]",
@@ -1050,6 +1036,27 @@ def build_final_video(
         check=True,
     )
     gc.collect()
+
+
+def delete_previous_github_release(old_release_id: str):
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if not token or not old_release_id or not str(old_release_id).strip().isdigit():
+        return
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    try:
+        resp = requests.delete(
+            f"https://api.github.com/repos/{GITHUB_REPO}/releases/{str(old_release_id).strip()}",
+            headers=headers,
+            timeout=30,
+        )
+        if resp.status_code in (200, 204):
+            print(f"Previous GitHub release {old_release_id} deleted.")
+    except Exception as e:
+        print(f"Warning: Could not delete previous release {old_release_id}: {e}")
 
 
 def upload_to_github_release(video_path: str, thumb_path: str, row_num: int, title: str) -> Tuple[str, str]:
@@ -1117,7 +1124,7 @@ def send_telegram_for_approval(video_path: str, thumb_path: str, row_num: int, t
         f"📌 শিরোনাম: {title}\n"
         f"🔗 পোস্ট: {post_url}\n"
         f"📊 Sheet Row: {row_num}\n\n"
-        f"💡 Approve দিলে ইনস্ট্যান্ট পোস্ট হবে, অথবা Schedule বাটনে সময় ঠিক করুন।"
+        f"💡 Approve দিলে ইনস্ট্যান্ট পোস্ট হবে, Schedule-এ সময় দিন, অথবা প্রয়োজন অনুযায়ী Regenerate বা Reject চাপুন।"
     )
     reply_markup = json.dumps(
         {
@@ -1127,6 +1134,7 @@ def send_telegram_for_approval(video_path: str, thumb_path: str, row_num: int, t
                     {"text": "⏰ Schedule", "callback_data": f"SCHEDULE_{row_num}"},
                 ],
                 [
+                    {"text": "🔄 Regenerate", "callback_data": f"REGENERATE_{row_num}"},
                     {"text": "❌ Reject", "callback_data": f"REJECT_{row_num}"},
                 ],
             ]
@@ -1177,6 +1185,14 @@ def main():
         return
 
     print(f"Processing Row {target_row}...")
+    old_release_id = (
+        row_data[col_map["Drive File ID"] - 1].strip()
+        if "Drive File ID" in col_map and len(row_data) >= col_map["Drive File ID"]
+        else ""
+    )
+    if old_release_id:
+        delete_previous_github_release(old_release_id)
+
     sheet.update_cell(target_row, col_map["Status"], "PROCESSING")
     sheet.update_cell(target_row, col_map["Video Status"], "GENERATING")
 
