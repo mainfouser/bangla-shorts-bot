@@ -23,7 +23,7 @@ GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "mainfouser/bangla-shorts-bot"
 SHEET_NAME = "Shorts_Queue"
 BGM_FILE = "bgm.mp3"
 LOGO_FILE = "logo.png"
-BGM_VOLUME = 0.08
+BGM_VOLUME = 0.045
 
 VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920
@@ -95,18 +95,18 @@ def split_sentences_for_tts(script: str) -> List[str]:
 
 
 def get_natural_prosody(sentence: str, idx: int, total: int) -> Tuple[str, str, float]:
-    """বাক্যের ধরন অনুযায়ী প্রাকৃতিক গতি, পিচ ও বিরতি নির্ধারণ"""
+    """বাক্যের ধরন অনুযায়ী স্বাভাবিক, ধীর ও রোবটিক-মুক্ত গতি, পিচ ও বিরতি নির্ধারণ"""
     if idx == 0:
-        return "+10%", "+2Hz", 0.25
+        return "-4%", "+0Hz", 0.35
     if "?" in sentence or any(w in sentence for w in ["কীভাবে", "কেন", "কী", "কত", "কখন"]):
-        return "+8%", "+3Hz", 0.28
+        return "-5%", "+1Hz", 0.38
     if any(w in sentence for w in ["সতর্ক", "জরুরি", "অবশ্যই", "মনে রাখবেন", "ভুল", "আইন", "ধাপ"]):
-        return "+5%", "-1Hz", 0.25
+        return "-7%", "-1Hz", 0.35
     if idx == total - 1:
-        return "+7%", "+1Hz", 0.30
+        return "-6%", "-1Hz", 0.42
     if idx % 2 == 1:
-        return "+8%", "+1Hz", 0.20
-    return "+6%", "+0Hz", 0.22
+        return "-5%", "+0Hz", 0.32
+    return "-6%", "+0Hz", 0.34
 
 
 async def _synthesize_phrase(text: str, out_path: str, rate: str, pitch: str):
@@ -316,35 +316,35 @@ def create_minimal_watermark_png(out_path: str):
 
 
 def create_clean_subtitle_png(text: str, is_hook: bool, out_path: str):
-    """যেকোনো ব্যাকগ্রাউন্ডের ওপর ১০০% স্পষ্ট পড়ার জন্য সেমি-ট্রান্সপারেন্ট ডার্ক কার্ডসহ মডার্ন সাবটাইটেল"""
+    """নিচের নিরাপদ জোনে (Shorts UI এড়িয়ে) স্পষ্ট পড়ার জন্য সেমি-ট্রান্সপারেন্ট ডার্ক কার্ডসহ সাবটাইটেল"""
     canvas_w = 1040
-    canvas_h = 380
+    canvas_h = 340
     img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    font_size = 64 if is_hook else 52
-    if len(text) > 40:
-        font_size = 44
+    font_size = 58 if is_hook else 48
+    if len(text) > 38:
+        font_size = 42
 
     bn_font = find_font(BENGALI_FONT_PATHS, font_size)
     en_font = find_font(LATIN_FONT_PATHS, font_size - 4)
-    lines = wrap_text_by_pixel(draw, text, bn_font, en_font, 900)
-    if len(lines) > 3:
-        lines = lines[:3]
-    line_h = font_size + 20
+    lines = wrap_text_by_pixel(draw, text, bn_font, en_font, 880)
+    if len(lines) > 2:
+        lines = lines[:2]
+    line_h = font_size + 18
     total_h = len(lines) * line_h
     start_y = (canvas_h - total_h) // 2
     max_line_w = max((measure_mixed_text_width(draw, ln, bn_font, en_font) for ln in lines), default=400)
-    pad_x, pad_y = 42, 24
+    pad_x, pad_y = 38, 20
     box_x0 = max(20, (canvas_w - max_line_w) // 2 - pad_x)
     box_x1 = min(canvas_w - 20, (canvas_w + max_line_w) // 2 + pad_x)
     box_y0 = max(10, start_y - pad_y)
-    box_y1 = min(canvas_h - 10, start_y + total_h + pad_y - 10)
-    border_col = (250, 204, 21, 220) if is_hook else (255, 255, 255, 90)
+    box_y1 = min(canvas_h - 10, start_y + total_h + pad_y - 8)
+    border_col = (250, 204, 21, 225) if is_hook else (255, 255, 255, 110)
     draw.rounded_rectangle(
         [box_x0, box_y0, box_x1, box_y1],
-        radius=28,
-        fill=(8, 16, 14, 210),
+        radius=26,
+        fill=(8, 16, 14, 215),
         outline=border_col,
         width=3 if is_hook else 2,
     )
@@ -447,63 +447,130 @@ def create_thumbnail_jpg(
     gc.collect()
 
 
-def create_outro_card_png(out_path: str):
-    """শেষ ৩.০ সেকেন্ডের পরিচ্ছন্ন চ্যানেল আউট্রো কার্ড"""
-    img = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (6, 65, 49, 255))
-    draw = ImageDraw.Draw(img)
+def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUTRO_DURATION):
+    """শেষ ৩.০ সেকেন্ডের প্রফেশনাল অ্যানিমেটেড আউট্রো (লোগো পালস, লাইক/কমেন্ট/শেয়ার/ফলো কার্ড স্লাইড-ইন ও গ্লো)"""
+    frames_dir = os.path.join(work_dir, "outro_frames")
+    os.makedirs(frames_dir, exist_ok=True)
+    n_frames = max(1, int(round(duration * FPS)))
 
-    cy = 380
+    logo_src = None
     if os.path.exists(LOGO_FILE):
         try:
-            logo = Image.open(LOGO_FILE).convert("RGBA")
-            lw = 220
-            lh = int(logo.height * (lw / logo.width))
-            logo = logo.resize((lw, lh), Image.Resampling.LANCZOS)
+            logo_src = Image.open(LOGO_FILE).convert("RGBA")
+        except Exception:
+            logo_src = None
+
+    bn_h1 = find_font(BENGALI_FONT_PATHS, 52)
+    en_h1 = find_font(LATIN_FONT_PATHS, 48)
+    bn_btn = find_font(BENGALI_FONT_PATHS, 38)
+    en_btn = find_font(LATIN_FONT_PATHS, 36)
+    bn_sub = find_font(BENGALI_FONT_PATHS, 35)
+    en_sub = find_font(LATIN_FONT_PATHS, 35)
+    bn_dom = find_font(BENGALI_FONT_PATHS, 42)
+    en_dom = find_font(LATIN_FONT_PATHS, 44)
+
+    for f_idx in range(n_frames):
+        t = f_idx / FPS
+        # Smooth ease-out progress for entrance animations
+        p_fast = min(1.0, t / 0.55)
+        ease_fast = 1.0 - (1.0 - p_fast) ** 3
+
+        p_mid = min(1.0, max(0.0, (t - 0.18) / 0.65))
+        ease_mid = 1.0 - (1.0 - p_mid) ** 3
+
+        p_slow = min(1.0, max(0.0, (t - 0.38) / 0.70))
+        ease_slow = 1.0 - (1.0 - p_slow) ** 3
+
+        pulse = 1.0 + 0.035 * math.sin(2.0 * math.pi * 1.4 * t)
+
+        img = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (5, 48, 37, 255))
+        draw = ImageDraw.Draw(img)
+
+        # Subtle decorative radial glow rings
+        glow_r = int(260 + 28 * math.sin(2.0 * math.pi * 1.2 * t))
+        cx, cy_center = VIDEO_WIDTH // 2, 470
+        draw.ellipse([cx - glow_r, cy_center - glow_r, cx + glow_r, cy_center + glow_r], fill=(16, 185, 129, 28))
+
+        cy = 340
+        if logo_src is not None:
+            lw = int(210 * pulse)
+            lh = max(1, int(logo_src.height * (lw / logo_src.width)))
+            resized_logo = logo_src.resize((lw, lh), Image.Resampling.LANCZOS)
+            ring_pad = int(22 * pulse)
             draw.ellipse(
-                [(VIDEO_WIDTH - lw) // 2 - 22, cy - 22, (VIDEO_WIDTH + lw) // 2 + 22, cy + lh + 22],
+                [(VIDEO_WIDTH - lw) // 2 - ring_pad, cy - ring_pad, (VIDEO_WIDTH + lw) // 2 + ring_pad, cy + lh + ring_pad],
                 fill=(255, 255, 255, 255),
                 outline=(250, 204, 21, 255),
                 width=5,
             )
-            img.paste(logo, ((VIDEO_WIDTH - lw) // 2, cy), logo)
-            cy += lh + 70
-        except Exception:
-            pass
+            img.paste(resized_logo, ((VIDEO_WIDTH - lw) // 2, cy), resized_logo)
+            cy += lh + 64
 
-    bn_h1 = find_font(BENGALI_FONT_PATHS, 54)
-    en_h1 = find_font(LATIN_FONT_PATHS, 50)
-    h1 = "তথ্যটি উপকারী মনে হলে"
-    w1 = measure_mixed_text_width(draw, h1, bn_h1, en_h1)
-    render_mixed_text_line(draw, (VIDEO_WIDTH - w1) // 2, cy, h1, bn_h1, en_h1, fill=(255, 255, 255, 255))
+        h1 = "তথ্যটি উপকারী মনে হলে"
+        w1 = measure_mixed_text_width(draw, h1, bn_h1, en_h1)
+        h1_y = int(cy + (1.0 - ease_fast) * 45)
+        render_mixed_text_line(draw, (VIDEO_WIDTH - w1) // 2, h1_y, h1, bn_h1, en_h1, fill=(255, 255, 255, 255))
 
-    cy += 90
-    btn_w, btn_h = 800, 102
-    bx0 = (VIDEO_WIDTH - btn_w) // 2
-    draw.rounded_rectangle([bx0, cy, bx0 + btn_w, cy + btn_h], radius=50, fill=(220, 38, 38, 255))
-    bn_btn = find_font(BENGALI_FONT_PATHS, 40)
-    en_btn = find_font(LATIN_FONT_PATHS, 38)
-    btn_txt = "লাইক  •  কমেন্ট  •  শেয়ার  •  ফলো করুন"
-    bw = measure_mixed_text_width(draw, btn_txt, bn_btn, en_btn)
-    render_mixed_text_line(draw, (VIDEO_WIDTH - bw) // 2, cy + 25, btn_txt, bn_btn, en_btn, fill=(255, 255, 255, 255))
+        cy += 88
+        btn_w, btn_h = 840, 106
+        btn_scale = 0.88 + 0.12 * ease_mid + 0.02 * math.sin(2.0 * math.pi * 2.0 * t)
+        cur_bw = int(btn_w * btn_scale)
+        cur_bh = int(btn_h * btn_scale)
+        bx0 = (VIDEO_WIDTH - cur_bw) // 2
+        by0 = int(cy + (1.0 - ease_mid) * 60 + (btn_h - cur_bh) // 2)
+        draw.rounded_rectangle(
+            [bx0, by0, bx0 + cur_bw, by0 + cur_bh],
+            radius=max(10, cur_bh // 2),
+            fill=(220, 38, 38, 255),
+            outline=(250, 204, 21, 230),
+            width=3,
+        )
+        btn_txt = "♥ লাইক  •  💬 কমেন্ট  •  ➤ শেয়ার  •  + ফলো"
+        bw = measure_mixed_text_width(draw, btn_txt, bn_btn, en_btn)
+        render_mixed_text_line(draw, (VIDEO_WIDTH - bw) // 2, by0 + (cur_bh - 42) // 2, btn_txt, bn_btn, en_btn, fill=(255, 255, 255, 255))
 
-    cy += 165
-    bn_sub = find_font(BENGALI_FONT_PATHS, 36)
-    en_sub = find_font(LATIN_FONT_PATHS, 36)
-    sub_txt = "বিস্তারিত গাইড ও আবেদন লিংক পেতে ভিজিট করুন:"
-    sw = measure_mixed_text_width(draw, sub_txt, bn_sub, en_sub)
-    render_mixed_text_line(draw, (VIDEO_WIDTH - sw) // 2, cy, sub_txt, bn_sub, en_sub, fill=(250, 204, 21, 255))
+        cy += 165
+        sub_txt = "বিস্তারিত গাইড ও আবেদন লিংক পেতে ভিজিট করুন:"
+        sw = measure_mixed_text_width(draw, sub_txt, bn_sub, en_sub)
+        sub_y = int(cy + (1.0 - ease_slow) * 45)
+        render_mixed_text_line(draw, (VIDEO_WIDTH - sw) // 2, sub_y, sub_txt, bn_sub, en_sub, fill=(250, 204, 21, 255))
 
-    cy += 75
-    dw, dh = 680, 98
-    dx0 = (VIDEO_WIDTH - dw) // 2
-    draw.rounded_rectangle([dx0, cy, dx0 + dw, cy + dh], radius=48, fill=(16, 185, 129, 255))
-    bn_dom = find_font(BENGALI_FONT_PATHS, 42)
-    en_dom = find_font(LATIN_FONT_PATHS, 44)
-    dom_txt = "homebdinfo.com"
-    dom_w = measure_mixed_text_width(draw, dom_txt, bn_dom, en_dom)
-    render_mixed_text_line(draw, (VIDEO_WIDTH - dom_w) // 2, cy + 22, dom_txt, bn_dom, en_dom, fill=(255, 255, 255, 255))
+        cy += 74
+        dw, dh = 690, 98
+        dx0 = (VIDEO_WIDTH - dw) // 2
+        dy0 = int(cy + (1.0 - ease_slow) * 50)
+        draw.rounded_rectangle([dx0, dy0, dx0 + dw, dy0 + dh], radius=49, fill=(16, 185, 129, 255), outline=(255, 255, 255, 180), width=2)
+        dom_txt = "homebdinfo.com"
+        dom_w = measure_mixed_text_width(draw, dom_txt, bn_dom, en_dom)
+        render_mixed_text_line(draw, (VIDEO_WIDTH - dom_w) // 2, dy0 + 22, dom_txt, bn_dom, en_dom, fill=(255, 255, 255, 255))
 
-    img.save(out_path, "PNG")
+        frame_path = os.path.join(frames_dir, f"outro_{f_idx:04d}.png")
+        img.convert("RGB").save(frame_path, "PNG")
+        del img, draw
+
+    if logo_src is not None:
+        logo_src.close()
+
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-threads", "2",
+            "-framerate", str(FPS),
+            "-i", os.path.join(frames_dir, "outro_%04d.png"),
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+            "-pix_fmt", "yuv420p", "-t", f"{duration:.2f}", out_mp4,
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    for fn in os.listdir(frames_dir):
+        fp = os.path.join(frames_dir, fn)
+        if os.path.exists(fp):
+            os.remove(fp)
+    if os.path.exists(frames_dir):
+        os.rmdir(frames_dir)
+    gc.collect()
 
 
 def _encode_lightweight_motion_clip(image_path: str, out_mp4: str, duration: int = 8):
@@ -823,7 +890,7 @@ def build_subtitle_overlay_track(kinetic_segments: List[Dict], voice_dur: float,
     sub_dir = os.path.join(work_dir, "sub_frames")
     os.makedirs(sub_dir, exist_ok=True)
     blank_png = os.path.join(sub_dir, "blank.png")
-    Image.new("RGBA", (1040, 380), (0, 0, 0, 0)).save(blank_png, "PNG")
+    Image.new("RGBA", (1040, 340), (0, 0, 0, 0)).save(blank_png, "PNG")
 
     seg_pngs = []
     for idx, seg in enumerate(kinetic_segments):
@@ -886,9 +953,9 @@ def build_final_video(
     total_duration = voice_dur + OUTRO_DURATION
 
     watermark_png = os.path.join(work_dir, "watermark_pill.png")
-    outro_png = os.path.join(work_dir, "outro_card.png")
+    outro_mp4 = os.path.join(work_dir, "outro_animated.mp4")
     create_minimal_watermark_png(watermark_png)
-    create_outro_card_png(outro_png)
+    build_animated_outro_clip(outro_mp4, work_dir, duration=OUTRO_DURATION)
     sub_mov = build_subtitle_overlay_track(kinetic_segments, voice_dur, work_dir)
 
     base_mp4 = os.path.join(work_dir, "base_layer.mp4")
@@ -943,7 +1010,7 @@ def build_final_video(
         "-i", voice_wav,
         "-loop", "1", "-t", f"{total_duration:.2f}", "-i", watermark_png,
         "-i", sub_mov,
-        "-loop", "1", "-t", f"{total_duration:.2f}", "-i", outro_png,
+        "-i", outro_mp4,
         "-loop", "1", "-t", f"{COVER_DURATION:.2f}", "-i", thumbnail_jpg,
     ]
     bgm_idx = None
@@ -951,22 +1018,22 @@ def build_final_video(
         final_inputs.extend(["-stream_loop", "-1", "-t", f"{total_duration:.2f}", "-i", BGM_FILE])
         bgm_idx = 6
 
+    # Subtitle positioned in lower-safe area (y=1340) so visual content stays open and Shorts UI buttons are clear
     f_parts = [
         f"[0:v]tpad=stop_mode=clone:stop_duration={OUTRO_DURATION:.2f}[v_base]",
         f"[v_base][2:v]overlay=32:48:enable='between(t,0,{voice_dur:.2f})'[v_wm]",
-        f"[v_wm][3:v]overlay=(W-w)/2:980:enable='between(t,0,{voice_dur:.2f})'[v_sub]",
+        f"[v_wm][3:v]overlay=(W-w)/2:1340:enable='between(t,0,{voice_dur:.2f})'[v_sub]",
         f"[v_sub]drawbox=x=0:y=0:w='iw*(t/{total_duration:.2f})':h=8:color=#FACC15@0.90:t=fill[v_prog]",
         f"[v_prog][4:v]overlay=0:0:enable='between(t,{voice_dur:.2f},{total_duration:.2f})'[v_outro]",
         f"[5:v]scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}[thumb_cover]",
         f"[v_outro][thumb_cover]overlay=0:0:enable='between(t,0,{COVER_DURATION:.2f})'[v_final]",
     ]
     if bgm_idx is not None:
-        fade_start = max(0.0, total_duration - 1.2)
-        outro_start = voice_dur
+        fade_out_start = max(0.0, voice_dur - 1.0)
         f_parts.extend([
-            f"[{bgm_idx}:a]volume=eval=frame:volume='if(gte(t,{outro_start:.2f}),0.22,0.08)',afade=t=out:st={fade_start:.2f}:d=1.2[bgm_dynamic]",
+            f"[{bgm_idx}:a]volume=0.045,atrim=0:{voice_dur:.2f},afade=t=out:st={fade_out_start:.2f}:d=1.0,apad=pad_dur={OUTRO_DURATION:.2f}[bgm_clean]",
             f"[1:a]apad=pad_dur={OUTRO_DURATION:.2f}[v_pad]",
-            f"[v_pad][bgm_dynamic]amix=inputs=2:duration=first:dropout_transition=2[a_final]",
+            f"[v_pad][bgm_clean]amix=inputs=2:duration=first:dropout_transition=2[a_final]",
         ])
     else:
         f_parts.append(f"[1:a]apad=pad_dur={OUTRO_DURATION:.2f}[a_final]")
