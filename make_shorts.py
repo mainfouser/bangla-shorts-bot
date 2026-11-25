@@ -18,7 +18,6 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from playwright.sync_api import sync_playwright
 
 VOICE_NAME = "bn-BD-PradeepNeural"
-SECONDARY_VOICE_NAME = "bn-BD-NabanitaNeural"
 GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "mainfouser/bangla-shorts-bot")
 SHEET_NAME = "Shorts_Queue"
 BGM_FILE = "bgm.mp3"
@@ -150,7 +149,6 @@ def clean_voiceover_script(text: str) -> str:
 
 
 def split_clauses_for_tts(script: str) -> List[Dict]:
-    # Split by major sentence delimiters first, then break long clauses on commas/semicolons
     raw_sentences = [p.strip() for p in re.split(r"(?<=[।!?\.])\s+", script) if p.strip()]
     if not raw_sentences:
         raw_sentences = [script]
@@ -162,7 +160,6 @@ def split_clauses_for_tts(script: str) -> List[Dict]:
         if not sub_parts:
             sub_parts = [sent]
 
-        # Merge tiny trailing fragments into previous clause to avoid choppy TTS
         merged = []
         for sp in sub_parts:
             if merged and len(sp) < 10:
@@ -191,7 +188,6 @@ def get_expressive_prosody(clause_info: Dict) -> Tuple[str, str, float]:
     is_hook = clause_info["is_hook"]
     is_end = clause_info["is_sentence_end"]
 
-    # Base pause: slightly longer at full sentence end, shorter at mid-sentence comma pause
     pause = 0.42 if is_end else 0.18
 
     if is_hook:
@@ -209,7 +205,6 @@ def get_expressive_prosody(clause_info: Dict) -> Tuple[str, str, float]:
     if s_idx >= max(1, total_s - 1) and is_end:
         return "-7%", "-2Hz", 0.48
 
-    # Alternating natural cadence across clauses so pitch never stays flat
     pattern_idx = (s_idx + (0 if is_end else 1)) % 4
     if pattern_idx == 0:
         return "-3%", "+2Hz", pause
@@ -591,6 +586,59 @@ def _elastic_ease_out(x: float) -> float:
     return (2.0 ** (-10.0 * x)) * math.sin((x * 10.0 - 0.75) * c4) + 1.0
 
 
+def _draw_premium_outro_backdrop(t: float) -> Image.Image:
+    # Rich multi-tone vertical gradient with subtle golden/emerald ambient orbs
+    top_rgb = (4, 34, 28)
+    bot_rgb = (6, 62, 48)
+    bg = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (*top_rgb, 255))
+    draw = ImageDraw.Draw(bg)
+
+    for y in range(0, VIDEO_HEIGHT, 4):
+        p = y / VIDEO_HEIGHT
+        r = int(top_rgb[0] + (bot_rgb[0] - top_rgb[0]) * p)
+        g = int(top_rgb[1] + (bot_rgb[1] - top_rgb[1]) * p)
+        b = int(top_rgb[2] + (bot_rgb[2] - top_rgb[2]) * p)
+        draw.rectangle([0, y, VIDEO_WIDTH, y + 4], fill=(r, g, b, 255))
+
+    # Subtle diagonal golden light streaks
+    for idx, base_x in enumerate([-180, 320, 820]):
+        shift_x = int(base_x + 36 * math.sin(2.0 * math.pi * 0.45 * t + idx))
+        poly = [
+            (shift_x, 0),
+            (shift_x + 130, 0),
+            (shift_x - 210, VIDEO_HEIGHT),
+            (shift_x - 340, VIDEO_HEIGHT),
+        ]
+        draw.polygon(poly, fill=(250, 204, 21, 11))
+
+    # Glowing orbs behind logo and lower CTA zone
+    orb1_r = int(310 + 34 * math.sin(2.0 * math.pi * 1.1 * t))
+    draw.ellipse(
+        [VIDEO_WIDTH // 2 - orb1_r, 430 - orb1_r, VIDEO_WIDTH // 2 + orb1_r, 430 + orb1_r],
+        fill=(16, 185, 129, 36),
+    )
+    orb2_r = int(260 + 28 * math.cos(2.0 * math.pi * 1.0 * t))
+    draw.ellipse(
+        [VIDEO_WIDTH // 2 - orb2_r, 1280 - orb2_r, VIDEO_WIDTH // 2 + orb2_r, 1280 + orb2_r],
+        fill=(250, 204, 21, 18),
+    )
+
+    # Outer & inner premium frame border
+    draw.rounded_rectangle(
+        [28, 28, VIDEO_WIDTH - 28, VIDEO_HEIGHT - 28],
+        radius=54,
+        outline=(250, 204, 21, 95),
+        width=3,
+    )
+    draw.rounded_rectangle(
+        [44, 44, VIDEO_WIDTH - 44, VIDEO_HEIGHT - 44],
+        radius=44,
+        outline=(255, 255, 255, 35),
+        width=1,
+    )
+    return bg
+
+
 def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUTRO_DURATION):
     frames_dir = os.path.join(work_dir, "outro_frames")
     os.makedirs(frames_dir, exist_ok=True)
@@ -603,131 +651,201 @@ def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUT
         except Exception:
             logo_src = None
 
+    bn_tag = find_font(BENGALI_FONT_PATHS, 28)
+    en_tag = find_font(LATIN_FONT_PATHS, 26)
     bn_h1 = find_font(BENGALI_FONT_PATHS, 54)
     en_h1 = find_font(LATIN_FONT_PATHS, 50)
-    bn_btn = find_font(BENGALI_FONT_PATHS, 38)
-    en_btn = find_font(LATIN_FONT_PATHS, 36)
-    bn_sub = find_font(BENGALI_FONT_PATHS, 36)
-    en_sub = find_font(LATIN_FONT_PATHS, 36)
-    bn_dom = find_font(BENGALI_FONT_PATHS, 44)
-    en_dom = find_font(LATIN_FONT_PATHS, 46)
+    bn_pill = find_font(BENGALI_FONT_PATHS, 31)
+    en_pill = find_font(LATIN_FONT_PATHS, 29)
+    bn_sub = find_font(BENGALI_FONT_PATHS, 35)
+    en_sub = find_font(LATIN_FONT_PATHS, 35)
+    bn_dom = find_font(BENGALI_FONT_PATHS, 46)
+    en_dom = find_font(LATIN_FONT_PATHS, 48)
+
+    action_items = [
+        ("লাইক", (239, 68, 68, 255)),
+        ("কমেন্ট", (59, 130, 246, 255)),
+        ("শেয়ার", (16, 185, 129, 255)),
+        ("ফলো", (245, 158, 11, 255)),
+    ]
 
     for f_idx in range(n_frames):
         t = f_idx / FPS
 
-        # Staggered elastic & cubic animations across 4.5s outro
-        p_logo = min(1.0, t / 0.70)
+        p_logo = min(1.0, t / 0.65)
         logo_pop = _elastic_ease_out(p_logo)
 
-        p_fast = min(1.0, max(0.0, (t - 0.25) / 0.55))
+        p_fast = min(1.0, max(0.0, (t - 0.20) / 0.50))
         ease_fast = 1.0 - (1.0 - p_fast) ** 3
 
-        p_mid = min(1.0, max(0.0, (t - 0.55) / 0.65))
-        ease_mid = _elastic_ease_out(p_mid)
-
-        p_slow = min(1.0, max(0.0, (t - 0.90) / 0.70))
+        p_slow = min(1.0, max(0.0, (t - 0.85) / 0.65))
         ease_slow = 1.0 - (1.0 - p_slow) ** 3
 
-        p_dom = min(1.0, max(0.0, (t - 1.25) / 0.70))
+        p_dom = min(1.0, max(0.0, (t - 1.15) / 0.65))
         ease_dom = _elastic_ease_out(p_dom)
 
-        pulse = 1.0 + 0.04 * math.sin(2.0 * math.pi * 1.35 * t)
-        cta_wave = 1.0 + 0.03 * math.sin(2.0 * math.pi * 1.8 * max(0.0, t - 0.8))
+        pulse = 1.0 + 0.035 * math.sin(2.0 * math.pi * 1.3 * t)
         dom_glow_alpha = int(140 + 85 * math.sin(2.0 * math.pi * 1.6 * t))
+        fade_out_alpha = 1.0
+        if duration - t < 0.35:
+            fade_out_alpha = max(0.0, (duration - t) / 0.35)
 
-        img = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (5, 48, 37, 255))
+        img = _draw_premium_outro_backdrop(t)
         draw = ImageDraw.Draw(img)
 
-        # Animated ambient radial glow behind logo
-        glow_r = int(280 + 38 * math.sin(2.0 * math.pi * 1.15 * t))
-        cx, cy_center = VIDEO_WIDTH // 2, 450
-        draw.ellipse(
-            [cx - glow_r, cy_center - glow_r, cx + glow_r, cy_center + glow_r],
-            fill=(16, 185, 129, 34),
+        # Top brand pill
+        top_pill_w, top_pill_h = 370, 56
+        tpx0 = (VIDEO_WIDTH - top_pill_w) // 2
+        tpy0 = 155
+        draw.rounded_rectangle(
+            [tpx0, tpy0, tpx0 + top_pill_w, tpy0 + top_pill_h],
+            radius=28,
+            fill=(12, 74, 57, 225),
+            outline=(250, 204, 21, 180),
+            width=2,
         )
-        outer_r = int(glow_r * 1.22)
+        top_label = "HOME BD INFO • শর্টস"
+        tlw = measure_mixed_text_width(draw, top_label, bn_tag, en_tag)
+        render_mixed_text_line(draw, (VIDEO_WIDTH - tlw) // 2, tpy0 + 11, top_label, bn_tag, en_tag, fill=(250, 204, 21, 255))
+
+        # Center logo medallion with rotating/pulsing gold ring
+        cy = 285
+        ring_cx, ring_cy = VIDEO_WIDTH // 2, cy + 125
+        outer_ring_r = int(148 * pulse)
         draw.ellipse(
-            [cx - outer_r, cy_center - outer_r, cx + outer_r, cy_center + outer_r],
-            outline=(250, 204, 21, 55),
+            [ring_cx - outer_ring_r, ring_cy - outer_ring_r, ring_cx + outer_ring_r, ring_cy + outer_ring_r],
+            outline=(250, 204, 21, 220),
+            width=5,
+        )
+        inner_ring_r = int(124 * (1.0 + 0.015 * math.cos(2.0 * math.pi * 1.5 * t)))
+        draw.ellipse(
+            [ring_cx - inner_ring_r, ring_cy - inner_ring_r, ring_cx + inner_ring_r, ring_cy + inner_ring_r],
+            fill=(255, 255, 255, 250),
+            outline=(16, 185, 129, 200),
             width=3,
         )
 
-        cy = 320
         if logo_src is not None:
-            logo_scale = max(0.2, logo_pop) * pulse
-            lw = max(24, int(215 * logo_scale))
+            logo_scale = max(0.25, logo_pop) * pulse
+            lw = max(24, int(190 * logo_scale))
             lh = max(24, int(logo_src.height * (lw / logo_src.width)))
             resized_logo = logo_src.resize((lw, lh), Image.Resampling.LANCZOS)
-            ring_pad = int(24 * pulse)
-            draw.ellipse(
-                [
-                    (VIDEO_WIDTH - lw) // 2 - ring_pad,
-                    cy + (215 - lh) // 2 - ring_pad,
-                    (VIDEO_WIDTH + lw) // 2 + ring_pad,
-                    cy + (215 - lh) // 2 + lh + ring_pad,
-                ],
-                fill=(255, 255, 255, 255),
-                outline=(250, 204, 21, 255),
-                width=6,
-            )
-            img.paste(resized_logo, ((VIDEO_WIDTH - lw) // 2, cy + (215 - lh) // 2), resized_logo)
-            cy += 215 + 66
+            img.paste(resized_logo, (ring_cx - lw // 2, ring_cy - lh // 2), resized_logo)
+
+        # Glassmorphic showcase card for CTA & domain
+        card_x0, card_y0 = 64, 625
+        card_x1, card_y1 = VIDEO_WIDTH - 64, 1525
+        draw.rounded_rectangle(
+            [card_x0, card_y0, card_x1, card_y1],
+            radius=40,
+            fill=(8, 42, 33, 215),
+            outline=(250, 204, 21, 130),
+            width=3,
+        )
 
         h1 = "তথ্যটি উপকারী মনে হলে"
         w1 = measure_mixed_text_width(draw, h1, bn_h1, en_h1)
-        h1_y = int(cy + (1.0 - ease_fast) * 50)
-        h1_col = (255, 255, 255, int(60 + 195 * ease_fast))
-        render_mixed_text_line(draw, (VIDEO_WIDTH - w1) // 2, h1_y, h1, bn_h1, en_h1, fill=h1_col)
+        h1_y = int(card_y0 + 58 + (1.0 - ease_fast) * 36)
+        render_mixed_text_line(draw, (VIDEO_WIDTH - w1) // 2, h1_y, h1, bn_h1, en_h1, fill=(255, 255, 255, 255))
 
-        cy += 92
-        btn_w, btn_h = 860, 110
-        btn_scale = (0.75 + 0.25 * max(0.0, ease_mid)) * cta_wave
-        cur_bw = int(btn_w * btn_scale)
-        cur_bh = int(btn_h * btn_scale)
-        bx0 = (VIDEO_WIDTH - cur_bw) // 2
-        by0 = int(cy + (1.0 - min(1.0, ease_mid)) * 55 + (btn_h - cur_bh) // 2)
-        draw.rounded_rectangle(
-            [bx0, by0, bx0 + cur_bw, by0 + cur_bh],
-            radius=max(12, cur_bh // 2),
-            fill=(220, 38, 38, 255),
-            outline=(250, 204, 21, 245),
-            width=4,
-        )
-        btn_txt = "♥ লাইক  •  💬 কমেন্ট  •  ➤ শেয়ার  •  + ফলো"
-        bw = measure_mixed_text_width(draw, btn_txt, bn_btn, en_btn)
-        render_mixed_text_line(
-            draw, (VIDEO_WIDTH - bw) // 2, by0 + (cur_bh - 42) // 2, btn_txt, bn_btn, en_btn, fill=(255, 255, 255, 255)
-        )
+        # 4 clean 2x2 action pills with pure geometric icons (zero missing font glyphs)
+        grid_top = card_y0 + 168
+        pill_w, pill_h = 410, 88
+        gap_x, gap_y = 26, 22
+        total_grid_w = pill_w * 2 + gap_x
+        grid_left = (VIDEO_WIDTH - total_grid_w) // 2
 
-        cy += 172
-        sub_txt = "বিস্তারিত গাইড ও আবেদন লিংক পেতে ভিজিট করুন:"
+        for idx, (label_bn, accent_rgba) in enumerate(action_items):
+            r_idx = idx // 2
+            c_idx = idx % 2
+            p_item = min(1.0, max(0.0, (t - (0.35 + idx * 0.10)) / 0.45))
+            item_pop = _elastic_ease_out(p_item)
+            item_wave = 1.0 + 0.022 * math.sin(2.0 * math.pi * 1.7 * max(0.0, t - 0.9) + idx * 0.8)
+            sc = (0.78 + 0.22 * max(0.0, item_pop)) * item_wave
+
+            pw = int(pill_w * sc)
+            ph = int(pill_h * sc)
+            base_px = grid_left + c_idx * (pill_w + gap_x)
+            base_py = grid_top + r_idx * (pill_h + gap_y)
+            px0 = base_px + (pill_w - pw) // 2
+            py0 = base_py + (pill_h - ph) // 2
+
+            draw.rounded_rectangle(
+                [px0, py0, px0 + pw, py0 + ph],
+                radius=max(12, ph // 2),
+                fill=(15, 68, 53, 240),
+                outline=(250, 204, 21, 175),
+                width=2,
+            )
+
+            # Geometric badge icon on left of each pill
+            badge_r = max(12, int(24 * sc))
+            bcx = px0 + int(48 * sc)
+            bcy = py0 + ph // 2
+            draw.ellipse([bcx - badge_r, bcy - badge_r, bcx + badge_r, bcy + badge_r], fill=accent_rgba)
+            if idx == 0:  # Like: crisp star/diamond mark
+                d_r = max(6, int(10 * sc))
+                draw.polygon([(bcx, bcy - d_r), (bcx + d_r, bcy), (bcx, bcy + d_r), (bcx - d_r, bcy)], fill=(255, 255, 255, 255))
+            elif idx == 1:  # Comment: chat dot
+                d_r = max(6, int(9 * sc))
+                draw.ellipse([bcx - d_r, bcy - d_r, bcx + d_r, bcy + d_r], fill=(255, 255, 255, 255))
+            elif idx == 2:  # Share: right triangle arrow
+                d_r = max(6, int(10 * sc))
+                draw.polygon([(bcx - d_r // 2, bcy - d_r), (bcx + d_r, bcy), (bcx - d_r // 2, bcy + d_r)], fill=(255, 255, 255, 255))
+            else:  # Follow: plus cross
+                d_r = max(6, int(10 * sc))
+                lw_plus = max(2, int(4 * sc))
+                draw.line([(bcx - d_r, bcy), (bcx + d_r, bcy)], fill=(255, 255, 255, 255), width=lw_plus)
+                draw.line([(bcx, bcy - d_r), (bcx, bcy + d_r)], fill=(255, 255, 255, 255), width=lw_plus)
+
+            txt_w = measure_mixed_text_width(draw, label_bn, bn_pill, en_pill)
+            render_mixed_text_line(
+                draw,
+                px0 + int(84 * sc) + max(0, (pw - int(96 * sc) - txt_w) // 2),
+                py0 + (ph - 36) // 2,
+                label_bn,
+                bn_pill,
+                en_pill,
+                fill=(255, 255, 255, 255),
+            )
+
+        # Divider line
+        div_y = grid_top + pill_h * 2 + gap_y + 38
+        draw.line([(card_x0 + 90, div_y), (card_x1 - 90, div_y)], fill=(250, 204, 21, 90), width=2)
+
+        sub_txt = "বিস্তারিত গাইড ও লিংক পেতে ভিজিট করুন"
         sw = measure_mixed_text_width(draw, sub_txt, bn_sub, en_sub)
-        sub_y = int(cy + (1.0 - ease_slow) * 48)
-        render_mixed_text_line(draw, (VIDEO_WIDTH - sw) // 2, sub_y, sub_txt, bn_sub, en_sub, fill=(250, 204, 21, 255))
+        sub_y = int(div_y + 30 + (1.0 - ease_slow) * 32)
+        render_mixed_text_line(draw, (VIDEO_WIDTH - sw) // 2, sub_y, sub_txt, bn_sub, en_sub, fill=(226, 232, 240, 255))
 
-        cy += 78
-        dw, dh = 710, 104
-        dom_scale = 0.8 + 0.2 * max(0.0, ease_dom)
+        # Premium glowing domain button
+        dw, dh = 720, 108
+        dom_scale = 0.82 + 0.18 * max(0.0, ease_dom)
         cur_dw = int(dw * dom_scale)
         cur_dh = int(dh * dom_scale)
         dx0 = (VIDEO_WIDTH - cur_dw) // 2
-        dy0 = int(cy + (1.0 - min(1.0, ease_dom)) * 50 + (dh - cur_dh) // 2)
+        dy0 = int(div_y + 92 + (1.0 - min(1.0, ease_dom)) * 36 + (dh - cur_dh) // 2)
+
         draw.rounded_rectangle(
-            [dx0 - 6, dy0 - 6, dx0 + cur_dw + 6, dy0 + cur_dh + 6],
-            radius=max(14, (cur_dh + 12) // 2),
+            [dx0 - 7, dy0 - 7, dx0 + cur_dw + 7, dy0 + cur_dh + 7],
+            radius=max(16, (cur_dh + 14) // 2),
             outline=(250, 204, 21, dom_glow_alpha),
             width=4,
         )
         draw.rounded_rectangle(
             [dx0, dy0, dx0 + cur_dw, dy0 + cur_dh],
-            radius=max(12, cur_dh // 2),
+            radius=max(14, cur_dh // 2),
             fill=(16, 185, 129, 255),
-            outline=(255, 255, 255, 210),
+            outline=(255, 255, 255, 220),
             width=3,
         )
         dom_txt = "homebdinfo.com"
         dom_w = measure_mixed_text_width(draw, dom_txt, bn_dom, en_dom)
-        render_mixed_text_line(draw, (VIDEO_WIDTH - dom_w) // 2, dy0 + 24, dom_txt, bn_dom, en_dom, fill=(255, 255, 255, 255))
+        render_mixed_text_line(draw, (VIDEO_WIDTH - dom_w) // 2, dy0 + 25, dom_txt, bn_dom, en_dom, fill=(255, 255, 255, 255))
+
+        if fade_out_alpha < 1.0:
+            blackout = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (4, 34, 28, int((1.0 - fade_out_alpha) * 235)))
+            img = Image.alpha_composite(img, blackout)
 
         frame_path = os.path.join(frames_dir, f"outro_{f_idx:04d}.png")
         img.convert("RGB").save(frame_path, "PNG")
@@ -831,7 +949,7 @@ def create_dynamic_topic_graphic_clip(
         for pt in valid_pts:
             if cur_y > card_y1 - 80:
                 break
-            pt_lines = wrap_text_by_pixel(draw, f"✔ {pt}", bn_pt, en_pt, VIDEO_WIDTH - 200)[:2]
+            pt_lines = wrap_text_by_pixel(draw, f"• {pt}", bn_pt, en_pt, VIDEO_WIDTH - 200)[:2]
             for pl in pt_lines:
                 render_mixed_text_line(draw, card_x0 + 45, cur_y, pl, bn_pt, en_pt, fill=(255, 255, 255, 245))
                 cur_y += 48
@@ -1211,11 +1329,10 @@ def build_final_video(
         f"[v_outro][thumb_cover]overlay=0:0:enable='between(t,0,{COVER_DURATION:.2f})'[v_final]",
     ]
     if bgm_idx is not None:
-        fade_out_start = max(0.0, total_duration - 1.2)
-        # Split BGM into voiceover bed (BGM_VOICE_VOLUME) and outro swell (BGM_OUTRO_VOLUME)
+        outro_fade_start = max(0.0, OUTRO_DURATION - 1.2)
         f_parts.extend([
             f"[{bgm_idx}:a]atrim=0:{voice_dur:.2f},volume={BGM_VOICE_VOLUME},afade=t=in:st=0:d=0.6[bgm_body]",
-            f"[{bgm_idx}:a]atrim={voice_dur:.2f}:{total_duration:.2f},asetpts=PTS-STARTPTS,volume={BGM_OUTRO_VOLUME},afade=t=out:st={max(0.0, OUTRO_DURATION - 1.2):.2f}:d=1.2[bgm_outro]",
+            f"[{bgm_idx}:a]atrim={voice_dur:.2f}:{total_duration:.2f},asetpts=PTS-STARTPTS,volume={BGM_OUTRO_VOLUME},afade=t=out:st={outro_fade_start:.2f}:d=1.2[bgm_outro]",
             f"[bgm_body][bgm_outro]concat=n=2:v=0:a=1[bgm_clean]",
             f"[1:a]apad=pad_dur={OUTRO_DURATION:.2f}[v_pad]",
             f"[v_pad][bgm_clean]amix=inputs=2:duration=first:weights='1.0 1.0':dropout_transition=2,volume=1.15[a_final]",
