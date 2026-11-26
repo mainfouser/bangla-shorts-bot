@@ -138,7 +138,7 @@ def clean_voiceover_script(text: str) -> str:
 
     text = re.sub(r"https?://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=]+", _replace_url, text)
     text = re.sub(
-        r"(?:[a-z0-9-]+\.)+(?:gov\.bd|com\.bd|org\.bd|edu\.bd|bd|com|org|net|info)",
+        r"\b(?:[a-z0-9-]+\.)+(?:gov\.bd|com\.bd|org\.bd|edu\.bd|bd|com|org|net|info)\b",
         lambda m: _spell_domain_for_tts(m.group(0)),
         text,
         flags=re.IGNORECASE,
@@ -312,8 +312,7 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
     concat_list = os.path.join(work_dir, "audio_concat.txt")
     with open(concat_list, "w", encoding="utf-8") as f:
         for sf in segment_files:
-            f.write(f"file '{sf}'
-")
+            f.write(f"file '{sf}'\n")
 
     raw_concat_wav = os.path.join(work_dir, "voiceover_raw.wav")
     final_voice_wav = os.path.join(work_dir, "voiceover_full.wav")
@@ -1091,7 +1090,6 @@ def capture_site_and_extract_images(post_url: str, out_png: str, work_dir: str) 
             lower_src = full_src.lower()
             if any(skip in lower_src for skip in ["logo", "icon", "avatar", "emoji", "banner-ad", "doubleclick"]):
                 continue
-            # Filter out text-heavy TOC infographics if aspect ratio or name suggests TOC
             if item.get("w", 0) >= 300 and item.get("h", 0) >= 200 and full_src not in seen_urls:
                 seen_urls.add(full_src)
                 image_urls.append(full_src)
@@ -1265,12 +1263,9 @@ def build_subtitle_overlay_track(kinetic_segments: List[Dict], voice_dur: float,
 
     with open(concat_file, "w", encoding="utf-8") as f:
         for img_path, dur in entries:
-            f.write(f"file '{img_path}'
-")
-            f.write(f"duration {dur:.3f}
-")
-        f.write(f"file '{entries[-1][0]}'
-")
+            f.write(f"file '{img_path}'\n")
+            f.write(f"duration {dur:.3f}\n")
+        f.write(f"file '{entries[-1][0]}'\n")
 
     sub_mov = os.path.join(work_dir, "kinetic_track.mov")
     subprocess.run(
@@ -1509,16 +1504,10 @@ def send_telegram_for_approval(video_path: str, thumb_path: str, row_num: int, t
         raise RuntimeError("TELEGRAM_BOT_TOKEN বা TELEGRAM_CHAT_ID পাওয়া যায়নি।")
 
     caption = (
-        f"🎬 নতুন Bangla Shorts প্রস্তুত!
-
-"
-        f"📌 শিরোনাম: {title}
-"
-        f"🔗 পোস্ট: {post_url}
-"
-        f"📊 Sheet Row: {row_num}
-
-"
+        f"🎬 নতুন Bangla Shorts প্রস্তুত!\n\n"
+        f"📌 শিরোনাম: {title}\n"
+        f"🔗 পোস্ট: {post_url}\n"
+        f"📊 Sheet Row: {row_num}\n\n"
         f"💡 Approve দিলে ইনস্ট্যান্ট পোস্ট হবে, Schedule-এ সময় দিন, অথবা প্রয়োজন অনুযায়ী Regenerate বা Reject চাপুন।"
     )
     reply_markup = json.dumps(
