@@ -17,17 +17,17 @@ import edge_tts
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from playwright.sync_api import sync_playwright
 
-# Voice settings: NabanitaNeural + Pitch shift (+8Hz) for a crisp, vibrant sound
-VOICE_NAME = "bn-BD-NabanitaNeural"
+# Male voice settings: PradeepNeural tuned for a confident, TV news/presentation broadcaster tone
+VOICE_NAME = "bn-BD-PradeepNeural"
 SECONDARY_VOICE_NAME = "bn-BD-PradeepNeural"
 GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "mainfouser/bangla-shorts-bot")
 SHEET_NAME = "Shorts_Queue"
 BGM_FILE = "bgm.mp3"
 LOGO_FILE = "logo.png"
 
-# BGM volume settings
-BGM_VOICE_VOLUME = 0.065
-BGM_OUTRO_VOLUME = 0.105
+# Clean, refined BGM volume so broadcast voice stays front and center
+BGM_VOICE_VOLUME = 0.042
+BGM_OUTRO_VOLUME = 0.075
 
 VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920
@@ -35,7 +35,7 @@ FPS = 30
 MAX_SCROLL_PX = 2600
 HOOK_DURATION = 4.0
 COVER_DURATION = 0.35
-OUTRO_DURATION = 4.5
+OUTRO_DURATION = 4.2
 
 BENGALI_FONT_PATHS = [
     "/usr/share/fonts/truetype/noto/NotoSansBengali-Bold.ttf",
@@ -164,7 +164,7 @@ def split_clauses_for_tts(script: str) -> List[Dict]:
 
         merged = []
         for sp in sub_parts:
-            if merged and (len(sp) < 14 or len(merged[-1]) < 16):
+            if merged and (len(sp) < 15 or len(merged[-1]) < 18):
                 merged[-1] = f"{merged[-1]} {sp}".strip()
             else:
                 merged.append(sp)
@@ -183,37 +183,44 @@ def split_clauses_for_tts(script: str) -> List[Dict]:
     return clauses
 
 
-def get_expressive_prosody(clause_info: Dict) -> Tuple[str, str, float]:
+def get_tv_presenter_prosody(clause_info: Dict) -> Tuple[str, str, float]:
+    """
+    Calibrated for bn-BD-PradeepNeural to sound like a seasoned TV news/presentation anchor:
+    steady pacing, authoritative low-mid chest resonance, clear articulation, and crisp sentence cadence.
+    """
     txt = clause_info["text"]
     s_idx = clause_info["sent_idx"]
     total_s = clause_info["total_sents"]
     is_hook = clause_info["is_hook"]
     is_end = clause_info["is_sentence_end"]
 
-    pause = 0.34 if is_end else 0.14
+    pause = 0.30 if is_end else 0.12
 
     if is_hook:
-        return "+3%", "+10Hz", 0.32
+        # Strong opening hook like a TV bulletin lead-in
+        return "+4%", "-1Hz", 0.28
 
     if "?" in txt or any(w in txt for w in ["কীভাবে", "কেন", "কী", "কত", "কখন", "আদৌ"]):
-        return "+1%", "+12Hz", pause + 0.04
+        return "+2%", "+1Hz", pause + 0.03
 
     if any(w in txt for w in ["সতর্ক", "জরুরি", "অবশ্যই", "মনে রাখবেন", "ভুল", "জরিমানা", "আইন", "নিষেধ", "বাতিল"]):
-        return "-3%", "+6Hz", pause + 0.05
+        # Firm, authoritative broadcast emphasis
+        return "-1%", "-2Hz", pause + 0.04
 
-    if any(w in txt for w in ["প্রথম", "দ্বিতীয়", "তৃতীয়", "ধাপ", "ক্যাটাগরি", "সবুজ", "হলুদ", "কমলা", "লাল"]):
-        return "-2%", "+8Hz", pause + 0.03
+    if any(w in txt for w in ["প্রথম", "দ্বিতীয়", "তৃতীয়", "ধাপ", "ক্যাটাগরি", "পয়েন্ট", "নিয়ম"]):
+        return "+1%", "-1Hz", pause + 0.02
 
     if s_idx >= max(1, total_s - 1) and is_end:
-        return "-3%", "+6Hz", 0.38
+        # Measured, decisive closing delivery
+        return "-1%", "-2Hz", 0.34
 
     pattern_idx = (s_idx + (0 if is_end else 1)) % 3
     if pattern_idx == 0:
-        return "-1%", "+9Hz", pause
+        return "+1%", "-1Hz", pause
     elif pattern_idx == 1:
-        return "-3%", "+7Hz", pause
+        return "0%", "-2Hz", pause
     else:
-        return "-1%", "+10Hz", pause
+        return "+2%", "-1Hz", pause
 
 
 async def _synthesize_phrase(text: str, out_path: str, rate: str, pitch: str, voice: str = VOICE_NAME):
@@ -221,7 +228,7 @@ async def _synthesize_phrase(text: str, out_path: str, rate: str, pitch: str, vo
     await communicate.save(out_path)
 
 
-def split_kinetic_chunks(sentence: str, max_chars: int = 36) -> List[str]:
+def split_kinetic_chunks(sentence: str, max_chars: int = 38) -> List[str]:
     words = sentence.split()
     chunks = []
     cur = []
@@ -236,6 +243,9 @@ def split_kinetic_chunks(sentence: str, max_chars: int = 36) -> List[str]:
             cur_len += len(w) + (1 if cur_len > 0 else 0)
     if cur:
         chunks.append(" ".join(cur))
+    if len(chunks) >= 2 and len(chunks[-1]) <= 6:
+        chunks[-2] = f"{chunks[-2]} {chunks[-1]}".strip()
+        chunks.pop()
     return chunks
 
 
@@ -249,7 +259,7 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
 
     for idx, c_info in enumerate(clauses):
         clause_text = c_info["text"]
-        rate, pitch, end_pause = get_expressive_prosody(c_info)
+        rate, pitch, end_pause = get_tv_presenter_prosody(c_info)
 
         raw_mp3 = os.path.join(work_dir, f"tts_{idx}.mp3")
         wav_seg = os.path.join(work_dir, f"tts_{idx}.wav")
@@ -280,7 +290,7 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
         clause_start = current_time
         current_time += dur
 
-        chunks = split_kinetic_chunks(clause_text, max_chars=36)
+        chunks = split_kinetic_chunks(clause_text, max_chars=38)
         total_chars = sum(len(c) for c in chunks) or 1
         t_cursor = clause_start
         for c_i, ch in enumerate(chunks):
@@ -324,14 +334,16 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
         stderr=subprocess.DEVNULL,
     )
 
+    # Studio/TV broadcast chain: clean low-cut, warm male body at 165Hz, clear diction at 3400Hz, broadcast compression & loudness
     subprocess.run(
         [
             "ffmpeg", "-y", "-threads", "2", "-i", raw_concat_wav,
             "-af", (
-                "highpass=f=100,equalizer=f=250:t=q:w=1.0:g=-1.5,"
-                "equalizer=f=3200:t=q:w=1.5:g=2.0,"
-                "acompressor=threshold=-18dB:ratio=2.2:attack=8:release=100,"
-                "loudnorm=I=-15.5:TP=-1.5:LRA=11"
+                "highpass=f=85,"
+                "equalizer=f=165:t=q:w=1.1:g=2.2,"
+                "equalizer=f=3400:t=q:w=1.4:g=2.4,"
+                "acompressor=threshold=-17dB:ratio=2.6:attack=6:release=110,"
+                "loudnorm=I=-15.0:TP=-1.5:LRA=10"
             ),
             "-ar", "44100", "-ac", "2", final_voice_wav,
         ],
@@ -409,31 +421,31 @@ def wrap_text_by_pixel(
 
 
 def create_minimal_watermark_png(out_path: str):
-    w, h = 460, 88
+    w, h = 440, 82
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     draw.rounded_rectangle(
-        [4, 8, w - 4, h - 8],
-        radius=38,
-        fill=(6, 45, 34, 210),
-        outline=(250, 204, 21, 210),
+        [4, 6, w - 4, h - 6],
+        radius=36,
+        fill=(9, 24, 38, 215),
+        outline=(250, 204, 21, 195),
         width=2,
     )
-    text_x = 28
+    text_x = 24
     if os.path.exists(LOGO_FILE):
         try:
             logo = Image.open(LOGO_FILE).convert("RGBA")
-            lw = 58
+            lw = 54
             lh = int(logo.height * (lw / logo.width))
             logo = logo.resize((lw, lh), Image.Resampling.LANCZOS)
-            draw.ellipse([14, 14, 76, 76], fill=(255, 255, 255, 245))
-            img.paste(logo, (16, (h - lh) // 2), logo)
-            text_x = 90
+            draw.ellipse([12, 12, 70, 70], fill=(255, 255, 255, 245))
+            img.paste(logo, (14, (h - lh) // 2), logo)
+            text_x = 84
         except Exception:
             pass
-    bn_font = find_font(BENGALI_FONT_PATHS, 30)
-    en_font = find_font(LATIN_FONT_PATHS, 30)
-    render_mixed_text_line(draw, text_x, 25, "homebdinfo.com", bn_font, en_font, fill=(255, 255, 255, 250))
+    bn_font = find_font(BENGALI_FONT_PATHS, 28)
+    en_font = find_font(LATIN_FONT_PATHS, 28)
+    render_mixed_text_line(draw, text_x, 23, "homebdinfo.com", bn_font, en_font, fill=(255, 255, 255, 250))
     img.save(out_path, "PNG")
 
 
@@ -443,9 +455,9 @@ def create_clean_subtitle_png(text: str, is_hook: bool, out_path: str):
     img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    font_size = 58 if is_hook else 48
+    font_size = 56 if is_hook else 46
     if len(text) > 38:
-        font_size = 42
+        font_size = 41
 
     bn_font = find_font(BENGALI_FONT_PATHS, font_size)
     en_font = find_font(LATIN_FONT_PATHS, font_size - 4)
@@ -456,16 +468,16 @@ def create_clean_subtitle_png(text: str, is_hook: bool, out_path: str):
     total_h = len(lines) * line_h
     start_y = (canvas_h - total_h) // 2
     max_line_w = max((measure_mixed_text_width(draw, ln, bn_font, en_font) for ln in lines), default=400)
-    pad_x, pad_y = 38, 20
+    pad_x, pad_y = 38, 18
     box_x0 = max(20, (canvas_w - max_line_w) // 2 - pad_x)
     box_x1 = min(canvas_w - 20, (canvas_w + max_line_w) // 2 + pad_x)
     box_y0 = max(10, start_y - pad_y)
     box_y1 = min(canvas_h - 10, start_y + total_h + pad_y - 8)
-    border_col = (250, 204, 21, 225) if is_hook else (255, 255, 255, 110)
+    border_col = (250, 204, 21, 225) if is_hook else (255, 255, 255, 115)
     draw.rounded_rectangle(
         [box_x0, box_y0, box_x1, box_y1],
-        radius=26,
-        fill=(8, 16, 14, 215),
+        radius=24,
+        fill=(9, 20, 32, 220),
         outline=border_col,
         width=3 if is_hook else 2,
     )
@@ -491,28 +503,28 @@ def create_hook_banner_clip(
     sc = Image.open(screenshot_png).convert("RGB")
     bg_crop = sc.crop((0, 0, VIDEO_WIDTH, min(VIDEO_HEIGHT, sc.height)))
     if bg_crop.height < VIDEO_HEIGHT:
-        padded = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT), (6, 45, 34))
+        padded = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT), (8, 22, 36))
         padded.paste(bg_crop, (0, 0))
         bg_crop = padded
 
     bg_blur = bg_crop.filter(ImageFilter.GaussianBlur(radius=16))
-    dark_scrim = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (5, 26, 20, 155))
+    dark_scrim = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (6, 17, 29, 165))
     base = Image.alpha_composite(bg_blur.convert("RGBA"), dark_scrim)
     draw = ImageDraw.Draw(base)
 
-    badge_w, badge_h = 430, 62
+    badge_w, badge_h = 440, 62
     bx0 = (VIDEO_WIDTH - badge_w) // 2
-    by0 = 240
+    by0 = 250
     draw.rounded_rectangle(
         [bx0, by0, bx0 + badge_w, by0 + badge_h],
         radius=31,
         fill=(250, 204, 21, 255),
     )
-    bn_badge = find_font(BENGALI_FONT_PATHS, 30)
-    en_badge = find_font(LATIN_FONT_PATHS, 28)
-    b_txt = "গুরুত্বপূর্ণ তথ্য • HOME BD INFO"
+    bn_badge = find_font(BENGALI_FONT_PATHS, 29)
+    en_badge = find_font(LATIN_FONT_PATHS, 27)
+    b_txt = "স্পেশাল রিপোর্ট • HOME BD INFO"
     bw = measure_mixed_text_width(draw, b_txt, bn_badge, en_badge)
-    render_mixed_text_line(draw, (VIDEO_WIDTH - bw) // 2, by0 + 13, b_txt, bn_badge, en_badge, fill=(6, 36, 28, 255))
+    render_mixed_text_line(draw, (VIDEO_WIDTH - bw) // 2, by0 + 13, b_txt, bn_badge, en_badge, fill=(8, 22, 36, 255))
 
     clean_title = re.sub(r"#\w+", "", title).strip()
     bn_t = find_font(BENGALI_FONT_PATHS, 54)
@@ -520,25 +532,25 @@ def create_hook_banner_clip(
     t_lines = wrap_text_by_pixel(draw, clean_title, bn_t, en_t, VIDEO_WIDTH - 200)[:3]
 
     clean_hook = re.sub(r"[•✔*#]+", "", hook_line).strip()
-    bn_h = find_font(BENGALI_FONT_PATHS, 40)
-    en_h = find_font(LATIN_FONT_PATHS, 38)
+    bn_h = find_font(BENGALI_FONT_PATHS, 39)
+    en_h = find_font(LATIN_FONT_PATHS, 37)
     h_lines = wrap_text_by_pixel(draw, clean_hook, bn_h, en_h, VIDEO_WIDTH - 210)[:3]
 
     title_block_h = len(t_lines) * 74
-    hook_block_h = len(h_lines) * 54
-    card_h = 54 + title_block_h + 36 + hook_block_h + 50
-    card_x0, card_y0 = 64, 340
+    hook_block_h = len(h_lines) * 53
+    card_h = 52 + title_block_h + 34 + hook_block_h + 48
+    card_x0, card_y0 = 64, 345
     card_x1, card_y1 = VIDEO_WIDTH - 64, card_y0 + card_h
 
     draw.rounded_rectangle(
         [card_x0, card_y0, card_x1, card_y1],
-        radius=36,
-        fill=(7, 46, 36, 238),
-        outline=(250, 204, 21, 225),
+        radius=34,
+        fill=(9, 24, 38, 242),
+        outline=(250, 204, 21, 220),
         width=3,
     )
 
-    cur_y = card_y0 + 50
+    cur_y = card_y0 + 48
     for i, ln in enumerate(t_lines):
         lw = measure_mixed_text_width(draw, ln, bn_t, en_t)
         col = (250, 204, 21, 255) if i == 0 else (255, 255, 255, 255)
@@ -546,12 +558,12 @@ def create_hook_banner_clip(
         cur_y += 74
 
     draw.line([(card_x0 + 60, cur_y + 12), (card_x1 - 60, cur_y + 12)], fill=(250, 204, 21, 110), width=2)
-    cur_y += 42
+    cur_y += 40
 
     for hl in h_lines:
         hw = measure_mixed_text_width(draw, hl, bn_h, en_h)
         render_mixed_text_line(draw, (VIDEO_WIDTH - hw) // 2, cur_y, hl, bn_h, en_h, fill=(226, 232, 240, 255))
-        cur_y += 54
+        cur_y += 53
 
     hook_png = os.path.join(os.path.dirname(out_mp4), "hook_card.png")
     base.convert("RGB").save(hook_png, "PNG")
@@ -613,7 +625,7 @@ def create_thumbnail_jpg(
         sc = Image.open(screenshot_png).convert("RGB")
         bg_img = sc.crop((0, 0, VIDEO_WIDTH, min(VIDEO_HEIGHT, sc.height)))
         if bg_img.height < VIDEO_HEIGHT:
-            padded = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT), (6, 78, 59))
+            padded = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT), (8, 24, 38))
             padded.paste(bg_img, (0, 0))
             bg_img = padded
 
@@ -623,19 +635,19 @@ def create_thumbnail_jpg(
     for y in range(VIDEO_HEIGHT):
         ratio = y / VIDEO_HEIGHT
         alpha = (
-            int(200 - (ratio / 0.25) * 55)
+            int(205 - (ratio / 0.25) * 50)
             if ratio < 0.25
-            else (int(145 + ((ratio - 0.65) / 0.35) * 85) if ratio > 0.65 else 150)
+            else (int(155 + ((ratio - 0.65) / 0.35) * 80) if ratio > 0.65 else 155)
         )
-        ov_draw.line([(0, y), (VIDEO_WIDTH, y)], fill=(6, 35, 27, alpha))
+        ov_draw.line([(0, y), (VIDEO_WIDTH, y)], fill=(7, 20, 34, alpha))
     canvas = Image.alpha_composite(canvas, overlay)
     draw = ImageDraw.Draw(canvas)
 
-    top_y = 110
+    top_y = 115
     if os.path.exists(LOGO_FILE):
         try:
             logo = Image.open(LOGO_FILE).convert("RGBA")
-            lw = 165
+            lw = 160
             lh = int(logo.height * (lw / logo.width))
             logo = logo.resize((lw, lh), Image.Resampling.LANCZOS)
             canvas.paste(logo, ((VIDEO_WIDTH - lw) // 2, top_y), logo)
@@ -644,23 +656,23 @@ def create_thumbnail_jpg(
             pass
 
     clean_title = re.sub(r"#\w+", "", title).strip()
-    bn_title_font = find_font(BENGALI_FONT_PATHS, 70)
-    en_title_font = find_font(LATIN_FONT_PATHS, 66)
+    bn_title_font = find_font(BENGALI_FONT_PATHS, 68)
+    en_title_font = find_font(LATIN_FONT_PATHS, 64)
     lines = wrap_text_by_pixel(draw, clean_title, bn_title_font, en_title_font, 900)
     if len(lines) > 4:
         lines = lines[:4]
         lines[-1] = lines[-1][:22] + "..."
 
-    line_h = 96
-    box_pad_y = 46
+    line_h = 94
+    box_pad_y = 44
     box_h = len(lines) * line_h + box_pad_y * 2
     box_y0 = max(top_y + 60, (VIDEO_HEIGHT - box_h) // 2)
     box_y1 = box_y0 + box_h
     draw.rounded_rectangle(
         [48, box_y0, VIDEO_WIDTH - 48, box_y1],
-        radius=34,
-        fill=(6, 65, 49, 230),
-        outline=(250, 204, 21, 240),
+        radius=32,
+        fill=(9, 25, 40, 235),
+        outline=(250, 204, 21, 235),
         width=4,
     )
 
@@ -681,9 +693,12 @@ def _smooth_ease_out(x: float) -> float:
     return 1.0 - ((1.0 - x) ** 3)
 
 
-def _draw_smooth_outro_backdrop(t: float) -> Image.Image:
-    top_rgb = (5, 38, 30)
-    bot_rgb = (7, 64, 50)
+def _draw_broadcast_outro_backdrop() -> Image.Image:
+    """
+    Clean, composed broadcast navy-slate gradient backdrop without distracting pulsing orbs or clutter.
+    """
+    top_rgb = (7, 19, 32)
+    bot_rgb = (12, 36, 56)
     bg = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (*top_rgb, 255))
     draw = ImageDraw.Draw(bg)
 
@@ -694,22 +709,19 @@ def _draw_smooth_outro_backdrop(t: float) -> Image.Image:
         b = int(top_rgb[2] + (bot_rgb[2] - top_rgb[2]) * p)
         draw.rectangle([0, y, VIDEO_WIDTH, y + 4], fill=(r, g, b, 255))
 
-    orb_r = int(295 + 14 * math.sin(2.0 * math.pi * 0.65 * t))
-    draw.ellipse(
-        [VIDEO_WIDTH // 2 - orb_r, 435 - orb_r, VIDEO_WIDTH // 2 + orb_r, 435 + orb_r],
-        fill=(16, 185, 129, 32),
-    )
-
-    draw.rounded_rectangle(
-        [32, 32, VIDEO_WIDTH - 32, VIDEO_HEIGHT - 32],
-        radius=48,
-        outline=(250, 204, 21, 85),
-        width=2,
-    )
+    # Subtle broadcast lower/upper accent bars
+    draw.rectangle([0, 0, VIDEO_WIDTH, 10], fill=(250, 204, 21, 230))
+    draw.rectangle([0, VIDEO_HEIGHT - 10, VIDEO_WIDTH, VIDEO_HEIGHT], fill=(250, 204, 21, 230))
     return bg
 
 
 def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUTRO_DURATION):
+    """
+    Tidy, structured TV/editorial outro end-slate:
+    - Top broadcast header badge
+    - Centered brand logo emblem
+    - Clean summary card with clear call-to-action & domain pill
+    """
     frames_dir = os.path.join(work_dir, "outro_frames")
     os.makedirs(frames_dir, exist_ok=True)
     n_frames = max(1, int(round(duration * FPS)))
@@ -723,177 +735,105 @@ def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUT
 
     bn_tag = find_font(BENGALI_FONT_PATHS, 28)
     en_tag = find_font(LATIN_FONT_PATHS, 26)
-    bn_h1 = find_font(BENGALI_FONT_PATHS, 52)
-    en_h1 = find_font(LATIN_FONT_PATHS, 48)
-    bn_pill = find_font(BENGALI_FONT_PATHS, 31)
-    en_pill = find_font(LATIN_FONT_PATHS, 29)
-    bn_sub = find_font(BENGALI_FONT_PATHS, 35)
-    en_sub = find_font(LATIN_FONT_PATHS, 35)
-    bn_dom = find_font(BENGALI_FONT_PATHS, 46)
-    en_dom = find_font(LATIN_FONT_PATHS, 48)
+    bn_h1 = find_font(BENGALI_FONT_PATHS, 50)
+    en_h1 = find_font(LATIN_FONT_PATHS, 46)
+    bn_sub = find_font(BENGALI_FONT_PATHS, 34)
+    en_sub = find_font(LATIN_FONT_PATHS, 34)
+    bn_dom = find_font(BENGALI_FONT_PATHS, 44)
+    en_dom = find_font(LATIN_FONT_PATHS, 46)
 
-    action_items = [
-        ("লাইক", (239, 68, 68, 255)),
-        ("কমেন্ট", (59, 130, 246, 255)),
-        ("শেয়ার", (16, 185, 129, 255)),
-        ("ফলো", (245, 158, 11, 255)),
-    ]
+    backdrop_base = _draw_broadcast_outro_backdrop()
 
     for f_idx in range(n_frames):
         t = f_idx / FPS
+        ease_h1 = _smooth_ease_out(min(1.0, t / 0.45))
+        ease_sub = _smooth_ease_out(max(0.0, min(1.0, (t - 0.25) / 0.45)))
+        ease_dom = _smooth_ease_out(max(0.0, min(1.0, (t - 0.45) / 0.45)))
 
-        entry_alpha = _smooth_ease_out(min(1.0, t / 0.55))
-        ease_h1 = _smooth_ease_out(max(0.0, min(1.0, (t - 0.15) / 0.50)))
-        ease_sub = _smooth_ease_out(max(0.0, min(1.0, (t - 0.55) / 0.55)))
-        ease_dom = _smooth_ease_out(max(0.0, min(1.0, (t - 0.80) / 0.55)))
-
-        breath = 1.0 + 0.014 * math.sin(2.0 * math.pi * 0.85 * t)
-        dom_glow_alpha = int(135 + 45 * math.sin(2.0 * math.pi * 1.0 * t))
-
-        img = _draw_smooth_outro_backdrop(t)
+        img = backdrop_base.copy()
         draw = ImageDraw.Draw(img)
 
-        top_pill_w, top_pill_h = 370, 56
+        # Top broadcast tag
+        top_pill_w, top_pill_h = 410, 56
         tpx0 = (VIDEO_WIDTH - top_pill_w) // 2
-        tpy0 = 155
+        tpy0 = 210
         draw.rounded_rectangle(
             [tpx0, tpy0, tpx0 + top_pill_w, tpy0 + top_pill_h],
             radius=28,
-            fill=(12, 74, 57, 225),
-            outline=(250, 204, 21, 175),
+            fill=(15, 42, 66, 235),
+            outline=(250, 204, 21, 200),
             width=2,
         )
-        top_label = "HOME BD INFO • শর্টস"
+        top_label = "HOME BD INFO • ডিজিটাল ডেস্ক"
         tlw = measure_mixed_text_width(draw, top_label, bn_tag, en_tag)
         render_mixed_text_line(draw, (VIDEO_WIDTH - tlw) // 2, tpy0 + 11, top_label, bn_tag, en_tag, fill=(250, 204, 21, 255))
 
-        cy = 285
-        ring_cx, ring_cy = VIDEO_WIDTH // 2, cy + 125
-        outer_ring_r = int(146 * breath)
+        # Centered brand emblem
+        ring_cx, ring_cy = VIDEO_WIDTH // 2, 435
+        outer_r = 136
+        inner_r = 116
         draw.ellipse(
-            [ring_cx - outer_ring_r, ring_cy - outer_ring_r, ring_cx + outer_ring_r, ring_cy + outer_ring_r],
-            outline=(250, 204, 21, 210),
+            [ring_cx - outer_r, ring_cy - outer_r, ring_cx + outer_r, ring_cy + outer_r],
+            outline=(250, 204, 21, 220),
             width=4,
         )
-        inner_ring_r = 124
         draw.ellipse(
-            [ring_cx - inner_ring_r, ring_cy - inner_ring_r, ring_cx + inner_ring_r, ring_cy + inner_ring_r],
-            fill=(255, 255, 255, 250),
-            outline=(16, 185, 129, 195),
-            width=3,
+            [ring_cx - inner_r, ring_cy - inner_r, ring_cx + inner_r, ring_cy + inner_r],
+            fill=(255, 255, 255, 252),
         )
-
         if logo_src is not None:
-            logo_scale = (0.90 + 0.10 * entry_alpha) * breath
-            lw = max(24, int(190 * logo_scale))
-            lh = max(24, int(logo_src.height * (lw / logo_src.width)))
+            lw = 175
+            lh = int(logo_src.height * (lw / logo_src.width))
             resized_logo = logo_src.resize((lw, lh), Image.Resampling.LANCZOS)
             img.paste(resized_logo, (ring_cx - lw // 2, ring_cy - lh // 2), resized_logo)
 
-        card_x0, card_y0 = 64, 625
-        card_x1, card_y1 = VIDEO_WIDTH - 64, 1525
+        # Clean unified outro panel
+        card_x0, card_y0 = 72, 650
+        card_x1, card_y1 = VIDEO_WIDTH - 72, 1430
         draw.rounded_rectangle(
             [card_x0, card_y0, card_x1, card_y1],
-            radius=40,
-            fill=(8, 42, 33, 220),
-            outline=(250, 204, 21, 125),
+            radius=36,
+            fill=(11, 28, 45, 238),
+            outline=(250, 204, 21, 165),
             width=3,
         )
 
-        h1 = "তথ্যটি উপকারী মনে হলে"
+        # Gold accent bar inside card
+        draw.rectangle([VIDEO_WIDTH // 2 - 60, card_y0 + 44, VIDEO_WIDTH // 2 + 60, card_y0 + 52], fill=(250, 204, 21, 255))
+
+        h1 = "নিয়মিত সঠিক তথ্য পেতে"
         w1 = measure_mixed_text_width(draw, h1, bn_h1, en_h1)
-        h1_y = int(card_y0 + 58 + (1.0 - ease_h1) * 24)
+        h1_y = int(card_y0 + 82 + (1.0 - ease_h1) * 18)
         render_mixed_text_line(draw, (VIDEO_WIDTH - w1) // 2, h1_y, h1, bn_h1, en_h1, fill=(255, 255, 255, 255))
 
-        grid_top = card_y0 + 168
-        pill_w, pill_h = 410, 88
-        gap_x, gap_y = 26, 22
-        total_grid_w = pill_w * 2 + gap_x
-        grid_left = (VIDEO_WIDTH - total_grid_w) // 2
+        h2 = "লাইক, কমেন্ট, শেয়ার ও ফলো করুন"
+        w2 = measure_mixed_text_width(draw, h2, bn_sub, en_sub)
+        h2_y = int(card_y0 + 166 + (1.0 - ease_h1) * 18)
+        render_mixed_text_line(draw, (VIDEO_WIDTH - w2) // 2, h2_y, h2, bn_sub, en_sub, fill=(250, 204, 21, 255))
 
-        for idx, (label_bn, accent_rgba) in enumerate(action_items):
-            r_idx = idx // 2
-            c_idx = idx % 2
-            p_item = _smooth_ease_out(max(0.0, min(1.0, (t - (0.25 + idx * 0.08)) / 0.45)))
-            subtle_float = 1.0 + 0.010 * math.sin(2.0 * math.pi * 1.0 * max(0.0, t - 0.8) + idx * 0.7)
-            sc = (0.94 + 0.06 * p_item) * subtle_float
+        div_y = card_y0 + 255
+        draw.line([(card_x0 + 80, div_y), (card_x1 - 80, div_y)], fill=(255, 255, 255, 55), width=2)
 
-            pw = int(pill_w * sc)
-            ph = int(pill_h * sc)
-            base_px = grid_left + c_idx * (pill_w + gap_x)
-            base_py = grid_top + r_idx * (pill_h + gap_y)
-            px0 = base_px + (pill_w - pw) // 2
-            py0 = int(base_py + (1.0 - p_item) * 16 + (pill_h - ph) // 2)
-
-            draw.rounded_rectangle(
-                [px0, py0, px0 + pw, py0 + ph],
-                radius=max(12, ph // 2),
-                fill=(15, 68, 53, 240),
-                outline=(250, 204, 21, 170),
-                width=2,
-            )
-
-            badge_r = max(12, int(24 * sc))
-            bcx = px0 + int(48 * sc)
-            bcy = py0 + ph // 2
-            draw.ellipse([bcx - badge_r, bcy - badge_r, bcx + badge_r, bcy + badge_r], fill=accent_rgba)
-            if idx == 0:
-                d_r = max(6, int(10 * sc))
-                draw.polygon([(bcx, bcy - d_r), (bcx + d_r, bcy), (bcx, bcy + d_r), (bcx - d_r, bcy)], fill=(255, 255, 255, 255))
-            elif idx == 1:
-                d_r = max(6, int(9 * sc))
-                draw.ellipse([bcx - d_r, bcy - d_r, bcx + d_r, bcy + d_r], fill=(255, 255, 255, 255))
-            elif idx == 2:
-                d_r = max(6, int(10 * sc))
-                draw.polygon([(bcx - d_r // 2, bcy - d_r), (bcx + d_r, bcy), (bcx - d_r // 2, bcy + d_r)], fill=(255, 255, 255, 255))
-            else:
-                d_r = max(6, int(10 * sc))
-                lw_plus = max(2, int(4 * sc))
-                draw.line([(bcx - d_r, bcy), (bcx + d_r, bcy)], fill=(255, 255, 255, 255), width=lw_plus)
-                draw.line([(bcx, bcy - d_r), (bcx, bcy + d_r)], fill=(255, 255, 255, 255), width=lw_plus)
-
-            txt_w = measure_mixed_text_width(draw, label_bn, bn_pill, en_pill)
-            render_mixed_text_line(
-                draw,
-                px0 + int(84 * sc) + max(0, (pw - int(96 * sc) - txt_w) // 2),
-                py0 + (ph - 36) // 2,
-                label_bn,
-                bn_pill,
-                en_pill,
-                fill=(255, 255, 255, 255),
-            )
-
-        div_y = grid_top + pill_h * 2 + gap_y + 38
-        draw.line([(card_x0 + 90, div_y), (card_x1 - 90, div_y)], fill=(250, 204, 21, 90), width=2)
-
-        sub_txt = "বিস্তারিত গাইড ও লিংক পেতে ভিজিট করুন"
+        sub_txt = "বিস্তারিত তথ্য ও গাইড ভিজিট করুন"
         sw = measure_mixed_text_width(draw, sub_txt, bn_sub, en_sub)
-        sub_y = int(div_y + 30 + (1.0 - ease_sub) * 20)
+        sub_y = int(div_y + 42 + (1.0 - ease_sub) * 16)
         render_mixed_text_line(draw, (VIDEO_WIDTH - sw) // 2, sub_y, sub_txt, bn_sub, en_sub, fill=(226, 232, 240, 255))
 
-        dw, dh = 720, 108
-        dom_scale = 0.94 + 0.06 * ease_dom
+        dw, dh = 700, 104
+        dom_scale = 0.96 + 0.04 * ease_dom
         cur_dw = int(dw * dom_scale)
         cur_dh = int(dh * dom_scale)
         dx0 = (VIDEO_WIDTH - cur_dw) // 2
-        dy0 = int(div_y + 92 + (1.0 - ease_dom) * 22 + (dh - cur_dh) // 2)
+        dy0 = int(div_y + 118 + (1.0 - ease_dom) * 16 + (dh - cur_dh) // 2)
 
         draw.rounded_rectangle(
-            [dx0 - 6, dy0 - 6, dx0 + cur_dw + 6, dy0 + cur_dh + 6],
-            radius=max(16, (cur_dh + 12) // 2),
-            outline=(250, 204, 21, dom_glow_alpha),
-            width=3,
-        )
-        draw.rounded_rectangle(
             [dx0, dy0, dx0 + cur_dw, dy0 + cur_dh],
-            radius=max(14, cur_dh // 2),
-            fill=(16, 185, 129, 255),
-            outline=(255, 255, 255, 220),
-            width=3,
+            radius=24,
+            fill=(250, 204, 21, 255),
         )
         dom_txt = "homebdinfo.com"
         dom_w = measure_mixed_text_width(draw, dom_txt, bn_dom, en_dom)
-        render_mixed_text_line(draw, (VIDEO_WIDTH - dom_w) // 2, dy0 + 25, dom_txt, bn_dom, en_dom, fill=(255, 255, 255, 255))
+        render_mixed_text_line(draw, (VIDEO_WIDTH - dom_w) // 2, dy0 + 24, dom_txt, bn_dom, en_dom, fill=(8, 22, 36, 255))
 
         frame_path = os.path.join(frames_dir, f"outro_{f_idx:04d}.png")
         img.convert("RGB").save(frame_path, "PNG")
@@ -901,6 +841,7 @@ def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUT
 
     if logo_src is not None:
         logo_src.close()
+    backdrop_base.close()
 
     subprocess.run(
         [
@@ -931,7 +872,7 @@ def _encode_lightweight_motion_clip(image_path: str, out_mp4: str, duration: int
             "ffmpeg", "-y", "-threads", "2", "-loop", "1", "-i", image_path,
             "-vf", (
                 f"scale={VIDEO_WIDTH * 2}:{VIDEO_HEIGHT * 2},"
-                f"zoompan=z='1+0.07*(on/{max(1, n_frames)})':x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2'"
+                f"zoompan=z='1+0.06*(on/{max(1, n_frames)})':x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2'"
                 f":d={n_frames}:s={VIDEO_WIDTH}x{VIDEO_HEIGHT}:fps={FPS}"
             ),
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
@@ -952,32 +893,32 @@ def create_dynamic_topic_graphic_clip(
     try:
         card_png = os.path.join(work_dir, f"motion_card_{clip_idx}.png")
         clip_mp4 = os.path.join(work_dir, f"motion_card_{clip_idx}.mp4")
-        img = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (6, 36, 28, 255))
+        img = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (7, 20, 34, 255))
         draw = ImageDraw.Draw(img)
 
-        for gx in range(0, VIDEO_WIDTH, 90):
-            draw.line([(gx, 0), (gx, VIDEO_HEIGHT)], fill=(255, 255, 255, 14), width=1)
-        for gy in range(0, VIDEO_HEIGHT, 90):
-            draw.line([(0, gy), (VIDEO_WIDTH, gy)], fill=(255, 255, 255, 14), width=1)
+        for gx in range(0, VIDEO_WIDTH, 96):
+            draw.line([(gx, 0), (gx, VIDEO_HEIGHT)], fill=(255, 255, 255, 12), width=1)
+        for gy in range(0, VIDEO_HEIGHT, 96):
+            draw.line([(0, gy), (VIDEO_WIDTH, gy)], fill=(255, 255, 255, 12), width=1)
 
-        badge_w, badge_h = 420, 66
+        badge_w, badge_h = 430, 64
         bx0 = (VIDEO_WIDTH - badge_w) // 2
-        by0 = 220
-        draw.rounded_rectangle([bx0, by0, bx0 + badge_w, by0 + badge_h], radius=33, fill=(250, 204, 21, 255))
-        bn_badge = find_font(BENGALI_FONT_PATHS, 32)
-        en_badge = find_font(LATIN_FONT_PATHS, 30)
-        b_txt = "গুরুত্বপূর্ণ তথ্য ও আপডেট"
+        by0 = 230
+        draw.rounded_rectangle([bx0, by0, bx0 + badge_w, by0 + badge_h], radius=32, fill=(250, 204, 21, 255))
+        bn_badge = find_font(BENGALI_FONT_PATHS, 30)
+        en_badge = find_font(LATIN_FONT_PATHS, 28)
+        b_txt = "মূল তথ্য ও নির্দেশনা"
         bw = measure_mixed_text_width(draw, b_txt, bn_badge, en_badge)
-        render_mixed_text_line(draw, (VIDEO_WIDTH - bw) // 2, by0 + 14, b_txt, bn_badge, en_badge, fill=(6, 36, 28, 255))
+        render_mixed_text_line(draw, (VIDEO_WIDTH - bw) // 2, by0 + 13, b_txt, bn_badge, en_badge, fill=(7, 20, 34, 255))
 
-        card_x0, card_y0 = 60, 320
-        card_x1, card_y1 = VIDEO_WIDTH - 60, 910
+        card_x0, card_y0 = 60, 330
+        card_x1, card_y1 = VIDEO_WIDTH - 60, 920
         draw.rounded_rectangle(
             [card_x0, card_y0, card_x1, card_y1],
             radius=32,
-            fill=(10, 56, 44, 240),
-            outline=(250, 204, 21, 230),
-            width=4,
+            fill=(11, 28, 45, 242),
+            outline=(250, 204, 21, 220),
+            width=3,
         )
 
         clean_head = re.sub(r"#\w+", "", headline).strip()
@@ -990,7 +931,7 @@ def create_dynamic_topic_graphic_clip(
             render_mixed_text_line(draw, (VIDEO_WIDTH - hw) // 2, cur_y, hl, bn_h, en_h, fill=(250, 204, 21, 255))
             cur_y += 64
 
-        draw.line([(card_x0 + 40, cur_y + 12), (card_x1 - 40, cur_y + 12)], fill=(255, 255, 255, 70), width=2)
+        draw.line([(card_x0 + 40, cur_y + 12), (card_x1 - 40, cur_y + 12)], fill=(255, 255, 255, 65), width=2)
         cur_y += 38
 
         bn_pt = find_font(BENGALI_FONT_PATHS, 36)
@@ -1109,7 +1050,7 @@ def capture_site_and_extract_images(post_url: str, out_png: str, work_dir: str) 
         padded.paste(img, (0, 0))
         img = padded
 
-    tint = Image.new("RGBA", img.size, (8, 18, 14, 38))
+    tint = Image.new("RGBA", img.size, (7, 18, 28, 42))
     img = Image.alpha_composite(img.convert("RGBA"), tint).convert("RGB")
     img.save(out_png, "PNG")
     final_sc_height = img.height
@@ -1134,7 +1075,7 @@ def capture_site_and_extract_images(post_url: str, out_png: str, work_dir: str) 
 
                 bg = src_im.resize((VIDEO_WIDTH, VIDEO_HEIGHT), Image.Resampling.LANCZOS)
                 bg = bg.filter(ImageFilter.GaussianBlur(radius=28))
-                dark_bg = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (6, 28, 22, 160))
+                dark_bg = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (7, 20, 34, 165))
                 canvas = Image.alpha_composite(bg.convert("RGBA"), dark_bg)
                 target_w = VIDEO_WIDTH - 80
                 target_h = int(src_im.height * (target_w / src_im.width))
@@ -1397,13 +1338,14 @@ def build_final_video(
         f"[v_outro][thumb_cover]overlay=0:0:enable='between(t,0,{COVER_DURATION:.2f})'[v_final]",
     ]
     if bgm_idx is not None:
-        outro_fade_out_start = max(0.0, OUTRO_DURATION - 1.2)
+        outro_fade_out_start = max(0.0, OUTRO_DURATION - 0.8)
+        # Clean BGM filtering: lowpass at 2600Hz + highpass at 120Hz so it stays warm, non-intrusive & never clashes with voice
         f_parts.extend([
-            f"[{bgm_idx}:a]atrim=0:{voice_dur:.2f},volume={BGM_VOICE_VOLUME},afade=t=in:st=0:d=0.6[bgm_body]",
-            f"[{bgm_idx}:a]atrim={voice_dur:.2f}:{total_duration:.2f},asetpts=PTS-STARTPTS,volume={BGM_OUTRO_VOLUME},afade=t=out:st={outro_fade_out_start:.2f}:d=1.2[bgm_outro]",
+            f"[{bgm_idx}:a]atrim=0:{voice_dur:.2f},highpass=f=120,lowpass=f=2600,volume={BGM_VOICE_VOLUME},afade=t=in:st=0:d=0.6[bgm_body]",
+            f"[{bgm_idx}:a]atrim={voice_dur:.2f}:{total_duration:.2f},asetpts=PTS-STARTPTS,highpass=f=120,lowpass=f=2800,volume={BGM_OUTRO_VOLUME},afade=t=out:st={outro_fade_out_start:.2f}:d=0.8[bgm_outro]",
             f"[bgm_body][bgm_outro]concat=n=2:v=0:a=1[bgm_clean]",
             f"[1:a]apad=pad_dur={OUTRO_DURATION:.2f}[v_pad]",
-            f"[v_pad][bgm_clean]amix=inputs=2:duration=first:weights='1.0 1.0':dropout_transition=2,volume=1.08[a_final]",
+            f"[v_pad][bgm_clean]amix=inputs=2:duration=first:weights='1.0 1.0':dropout_transition=2,volume=1.05[a_final]",
         ])
     else:
         f_parts.append(f"[1:a]apad=pad_dur={OUTRO_DURATION:.2f}[a_final]")
@@ -1600,7 +1542,7 @@ def main():
             print("1. Capturing ad-free site screenshot & extracting article graphics...")
             sc_height, article_clips, article_headings = capture_site_and_extract_images(post_url, screenshot_png, work_dir)
 
-            print("2. Generating natural, human-like voiceover...")
+            print("2. Generating TV-presenter style male voiceover...")
             voice_wav, kinetic_segments = generate_natural_voiceover(script, work_dir)
 
             print("3. Preparing universal topic-relevant visual clips...")
