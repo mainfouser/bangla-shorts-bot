@@ -197,28 +197,25 @@ def get_tv_presenter_prosody(clause_info: Dict) -> Tuple[str, str, float]:
     pause = 0.30 if is_end else 0.12
 
     if is_hook:
-        # Strong opening hook like a TV bulletin lead-in
         return "+4%", "-1Hz", 0.28
 
     if "?" in txt or any(w in txt for w in ["কীভাবে", "কেন", "কী", "কত", "কখন", "আদৌ"]):
         return "+2%", "+1Hz", pause + 0.03
 
     if any(w in txt for w in ["সতর্ক", "জরুরি", "অবশ্যই", "মনে রাখবেন", "ভুল", "জরিমানা", "আইন", "নিষেধ", "বাতিল"]):
-        # Firm, authoritative broadcast emphasis
         return "-1%", "-2Hz", pause + 0.04
 
     if any(w in txt for w in ["প্রথম", "দ্বিতীয়", "তৃতীয়", "ধাপ", "ক্যাটাগরি", "পয়েন্ট", "নিয়ম"]):
         return "+1%", "-1Hz", pause + 0.02
 
     if s_idx >= max(1, total_s - 1) and is_end:
-        # Measured, decisive closing delivery
         return "-1%", "-2Hz", 0.34
 
     pattern_idx = (s_idx + (0 if is_end else 1)) % 3
     if pattern_idx == 0:
         return "+1%", "-1Hz", pause
     elif pattern_idx == 1:
-        return "0%", "-2Hz", pause
+        return "+0%", "-2Hz", pause
     else:
         return "+2%", "-1Hz", pause
 
@@ -334,7 +331,6 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
         stderr=subprocess.DEVNULL,
     )
 
-    # Studio/TV broadcast chain: clean low-cut, warm male body at 165Hz, clear diction at 3400Hz, broadcast compression & loudness
     subprocess.run(
         [
             "ffmpeg", "-y", "-threads", "2", "-i", raw_concat_wav,
@@ -694,9 +690,6 @@ def _smooth_ease_out(x: float) -> float:
 
 
 def _draw_broadcast_outro_backdrop() -> Image.Image:
-    """
-    Clean, composed broadcast navy-slate gradient backdrop without distracting pulsing orbs or clutter.
-    """
     top_rgb = (7, 19, 32)
     bot_rgb = (12, 36, 56)
     bg = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (*top_rgb, 255))
@@ -709,19 +702,12 @@ def _draw_broadcast_outro_backdrop() -> Image.Image:
         b = int(top_rgb[2] + (bot_rgb[2] - top_rgb[2]) * p)
         draw.rectangle([0, y, VIDEO_WIDTH, y + 4], fill=(r, g, b, 255))
 
-    # Subtle broadcast lower/upper accent bars
     draw.rectangle([0, 0, VIDEO_WIDTH, 10], fill=(250, 204, 21, 230))
     draw.rectangle([0, VIDEO_HEIGHT - 10, VIDEO_WIDTH, VIDEO_HEIGHT], fill=(250, 204, 21, 230))
     return bg
 
 
 def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUTRO_DURATION):
-    """
-    Tidy, structured TV/editorial outro end-slate:
-    - Top broadcast header badge
-    - Centered brand logo emblem
-    - Clean summary card with clear call-to-action & domain pill
-    """
     frames_dir = os.path.join(work_dir, "outro_frames")
     os.makedirs(frames_dir, exist_ok=True)
     n_frames = max(1, int(round(duration * FPS)))
@@ -753,7 +739,6 @@ def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUT
         img = backdrop_base.copy()
         draw = ImageDraw.Draw(img)
 
-        # Top broadcast tag
         top_pill_w, top_pill_h = 410, 56
         tpx0 = (VIDEO_WIDTH - top_pill_w) // 2
         tpy0 = 210
@@ -768,7 +753,6 @@ def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUT
         tlw = measure_mixed_text_width(draw, top_label, bn_tag, en_tag)
         render_mixed_text_line(draw, (VIDEO_WIDTH - tlw) // 2, tpy0 + 11, top_label, bn_tag, en_tag, fill=(250, 204, 21, 255))
 
-        # Centered brand emblem
         ring_cx, ring_cy = VIDEO_WIDTH // 2, 435
         outer_r = 136
         inner_r = 116
@@ -787,7 +771,6 @@ def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUT
             resized_logo = logo_src.resize((lw, lh), Image.Resampling.LANCZOS)
             img.paste(resized_logo, (ring_cx - lw // 2, ring_cy - lh // 2), resized_logo)
 
-        # Clean unified outro panel
         card_x0, card_y0 = 72, 650
         card_x1, card_y1 = VIDEO_WIDTH - 72, 1430
         draw.rounded_rectangle(
@@ -798,7 +781,6 @@ def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUT
             width=3,
         )
 
-        # Gold accent bar inside card
         draw.rectangle([VIDEO_WIDTH // 2 - 60, card_y0 + 44, VIDEO_WIDTH // 2 + 60, card_y0 + 52], fill=(250, 204, 21, 255))
 
         h1 = "নিয়মিত সঠিক তথ্য পেতে"
@@ -1339,7 +1321,6 @@ def build_final_video(
     ]
     if bgm_idx is not None:
         outro_fade_out_start = max(0.0, OUTRO_DURATION - 0.8)
-        # Clean BGM filtering: lowpass at 2600Hz + highpass at 120Hz so it stays warm, non-intrusive & never clashes with voice
         f_parts.extend([
             f"[{bgm_idx}:a]atrim=0:{voice_dur:.2f},highpass=f=120,lowpass=f=2600,volume={BGM_VOICE_VOLUME},afade=t=in:st=0:d=0.6[bgm_body]",
             f"[{bgm_idx}:a]atrim={voice_dur:.2f}:{total_duration:.2f},asetpts=PTS-STARTPTS,highpass=f=120,lowpass=f=2800,volume={BGM_OUTRO_VOLUME},afade=t=out:st={outro_fade_out_start:.2f}:d=0.8[bgm_outro]",
