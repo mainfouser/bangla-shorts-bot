@@ -18,14 +18,15 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from playwright.sync_api import sync_playwright
 
 VOICE_NAME = "bn-BD-PradeepNeural"
+SECONDARY_VOICE_NAME = "bn-BD-NabanitaNeural"
 GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "mainfouser/bangla-shorts-bot")
 SHEET_NAME = "Shorts_Queue"
 BGM_FILE = "bgm.mp3"
 LOGO_FILE = "logo.png"
 
-# BGM volume: balanced so it stays audible under voiceover and rises gently in outro
-BGM_VOICE_VOLUME = 0.085
-BGM_OUTRO_VOLUME = 0.14
+# BGM volume: soft & smooth under voiceover, gentle swell in outro without sudden jump
+BGM_VOICE_VOLUME = 0.065
+BGM_OUTRO_VOLUME = 0.105
 
 VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920
@@ -162,7 +163,7 @@ def split_clauses_for_tts(script: str) -> List[Dict]:
 
         merged = []
         for sp in sub_parts:
-            if merged and len(sp) < 10:
+            if merged and (len(sp) < 14 or len(merged[-1]) < 16):
                 merged[-1] = f"{merged[-1]} {sp}".strip()
             else:
                 merged.append(sp)
@@ -188,32 +189,30 @@ def get_expressive_prosody(clause_info: Dict) -> Tuple[str, str, float]:
     is_hook = clause_info["is_hook"]
     is_end = clause_info["is_sentence_end"]
 
-    pause = 0.42 if is_end else 0.18
+    pause = 0.34 if is_end else 0.14
 
     if is_hook:
-        return "+2%", "+4Hz", 0.40
+        return "+3%", "+2Hz", 0.32
 
     if "?" in txt or any(w in txt for w in ["কীভাবে", "কেন", "কী", "কত", "কখন", "আদৌ"]):
-        return "+1%", "+5Hz", pause + 0.05
+        return "+1%", "+3Hz", pause + 0.04
 
     if any(w in txt for w in ["সতর্ক", "জরুরি", "অবশ্যই", "মনে রাখবেন", "ভুল", "জরিমানা", "আইন", "নিষেধ", "বাতিল"]):
-        return "-8%", "-2Hz", pause + 0.06
+        return "-5%", "-1Hz", pause + 0.05
 
     if any(w in txt for w in ["প্রথম", "দ্বিতীয়", "তৃতীয়", "ধাপ", "ক্যাটাগরি", "সবুজ", "হলুদ", "কমলা", "লাল"]):
-        return "-5%", "+2Hz", pause + 0.04
+        return "-3%", "+1Hz", pause + 0.03
 
     if s_idx >= max(1, total_s - 1) and is_end:
-        return "-7%", "-2Hz", 0.48
+        return "-4%", "-1Hz", 0.40
 
-    pattern_idx = (s_idx + (0 if is_end else 1)) % 4
+    pattern_idx = (s_idx + (0 if is_end else 1)) % 3
     if pattern_idx == 0:
-        return "-3%", "+2Hz", pause
+        return "-2%", "+1Hz", pause
     elif pattern_idx == 1:
-        return "-6%", "-1Hz", pause
-    elif pattern_idx == 2:
-        return "-2%", "+3Hz", pause
+        return "-4%", "+0Hz", pause
     else:
-        return "-5%", "+0Hz", pause
+        return "-1%", "+2Hz", pause
 
 
 async def _synthesize_phrase(text: str, out_path: str, rate: str, pitch: str, voice: str = VOICE_NAME):
@@ -328,10 +327,10 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
         [
             "ffmpeg", "-y", "-threads", "2", "-i", raw_concat_wav,
             "-af", (
-                "highpass=f=85,equalizer=f=210:t=q:w=1.0:g=2.8,"
-                "equalizer=f=3200:t=q:w=1.4:g=2.2,"
-                "acompressor=threshold=-17dB:ratio=2.5:attack=6:release=80,"
-                "loudnorm=I=-15:TP=-1.5:LRA=11"
+                "highpass=f=80,equalizer=f=200:t=q:w=1.0:g=2.0,"
+                "equalizer=f=2800:t=q:w=1.5:g=1.2,"
+                "acompressor=threshold=-18dB:ratio=2.2:attack=8:release=100,"
+                "loudnorm=I=-15.5:TP=-1.5:LRA=11"
             ),
             "-ar", "44100", "-ac", "2", final_voice_wav,
         ],
@@ -481,6 +480,99 @@ def create_clean_subtitle_png(text: str, is_hook: bool, out_path: str):
     img.save(out_path, "PNG")
 
 
+def create_hook_banner_clip(
+    title: str,
+    hook_line: str,
+    screenshot_png: str,
+    out_mp4: str,
+    duration: float = HOOK_DURATION,
+):
+    sc = Image.open(screenshot_png).convert("RGB")
+    bg_crop = sc.crop((0, 0, VIDEO_WIDTH, min(VIDEO_HEIGHT, sc.height)))
+    if bg_crop.height < VIDEO_HEIGHT:
+        padded = Image.new("RGB", (VIDEO_WIDTH, VIDEO_HEIGHT), (6, 45, 34))
+        padded.paste(bg_crop, (0, 0))
+        bg_crop = padded
+
+    bg_blur = bg_crop.filter(ImageFilter.GaussianBlur(radius=16))
+    dark_scrim = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (5, 26, 20, 155))
+    base = Image.alpha_composite(bg_blur.convert("RGBA"), dark_scrim)
+    draw = ImageDraw.Draw(base)
+
+    badge_w, badge_h = 430, 62
+    bx0 = (VIDEO_WIDTH - badge_w) // 2
+    by0 = 250
+    draw.rounded_rectangle(
+        [bx0, by0, bx0 + badge_w, by0 + badge_h],
+        radius=31,
+        fill=(250, 204, 21, 255),
+    )
+    bn_badge = find_font(BENGALI_FONT_PATHS, 30)
+    en_badge = find_font(LATIN_FONT_PATHS, 28)
+    b_txt = "গুরুত্বপূর্ণ তথ্য • HOME BD INFO"
+    bw = measure_mixed_text_width(draw, b_txt, bn_badge, en_badge)
+    render_mixed_text_line(draw, (VIDEO_WIDTH - bw) // 2, by0 + 13, b_txt, bn_badge, en_badge, fill=(6, 36, 28, 255))
+
+    card_x0, card_y0 = 64, 355
+    card_x1, card_y1 = VIDEO_WIDTH - 64, 1160
+    draw.rounded_rectangle(
+        [card_x0, card_y0, card_x1, card_y1],
+        radius=36,
+        fill=(7, 46, 36, 238),
+        outline=(250, 204, 21, 225),
+        width=3,
+    )
+
+    clean_title = re.sub(r"#\w+", "", title).strip()
+    bn_t = find_font(BENGALI_FONT_PATHS, 56)
+    en_t = find_font(LATIN_FONT_PATHS, 52)
+    t_lines = wrap_text_by_pixel(draw, clean_title, bn_t, en_t, VIDEO_WIDTH - 200)[:3]
+
+    cur_y = card_y0 + 54
+    for i, ln in enumerate(t_lines):
+        lw = measure_mixed_text_width(draw, ln, bn_t, en_t)
+        col = (250, 204, 21, 255) if i == 0 else (255, 255, 255, 255)
+        render_mixed_text_line(draw, (VIDEO_WIDTH - lw) // 2, cur_y, ln, bn_t, en_t, fill=col)
+        cur_y += 76
+
+    draw.line([(card_x0 + 60, cur_y + 18), (card_x1 - 60, cur_y + 18)], fill=(250, 204, 21, 110), width=2)
+    cur_y += 52
+
+    clean_hook = re.sub(r"[•✔*#]+", "", hook_line).strip()
+    bn_h = find_font(BENGALI_FONT_PATHS, 40)
+    en_h = find_font(LATIN_FONT_PATHS, 38)
+    h_lines = wrap_text_by_pixel(draw, clean_hook, bn_h, en_h, VIDEO_WIDTH - 210)[:3]
+    for hl in h_lines:
+        if cur_y > card_y1 - 75:
+            break
+        hw = measure_mixed_text_width(draw, hl, bn_h, en_h)
+        render_mixed_text_line(draw, (VIDEO_WIDTH - hw) // 2, cur_y, hl, bn_h, en_h, fill=(226, 232, 240, 255))
+        cur_y += 56
+
+    hook_png = os.path.join(os.path.dirname(out_mp4), "hook_card.png")
+    base.convert("RGB").save(hook_png, "PNG")
+    del sc, bg_crop, bg_blur, dark_scrim, base, draw
+    gc.collect()
+
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-threads", "2", "-loop", "1", "-t", f"{duration:.2f}", "-i", hook_png,
+            "-vf", (
+                f"scale=w='trunc({VIDEO_WIDTH}(1+0.03*(t/{duration:.2f}))/2)*2':h=-2,"
+                f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT}:(iw-{VIDEO_WIDTH})/2:(ih-{VIDEO_HEIGHT})/2"
+            ),
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p",
+            "-r", str(FPS), "-t", f"{duration:.2f}", out_mp4,
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if os.path.exists(hook_png):
+        os.remove(hook_png)
+    gc.collect()
+
+
 def create_thumbnail_jpg(
     title: str,
     screenshot_png: str,
@@ -578,18 +670,14 @@ def create_thumbnail_jpg(
     gc.collect()
 
 
-def _elastic_ease_out(x: float) -> float:
+def _smooth_ease_out(x: float) -> float:
     x = max(0.0, min(1.0, x))
-    if x == 0.0 or x == 1.0:
-        return x
-    c4 = (2.0 * math.pi) / 3.0
-    return (2.0 ** (-10.0 * x)) * math.sin((x * 10.0 - 0.75) * c4) + 1.0
+    return 1.0 - ((1.0 - x) ** 3)
 
 
-def _draw_premium_outro_backdrop(t: float) -> Image.Image:
-    # Rich multi-tone vertical gradient with subtle golden/emerald ambient orbs
-    top_rgb = (4, 34, 28)
-    bot_rgb = (6, 62, 48)
+def _draw_smooth_outro_backdrop(t: float) -> Image.Image:
+    top_rgb = (5, 38, 30)
+    bot_rgb = (7, 64, 50)
     bg = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (*top_rgb, 255))
     draw = ImageDraw.Draw(bg)
 
@@ -600,41 +688,17 @@ def _draw_premium_outro_backdrop(t: float) -> Image.Image:
         b = int(top_rgb[2] + (bot_rgb[2] - top_rgb[2]) * p)
         draw.rectangle([0, y, VIDEO_WIDTH, y + 4], fill=(r, g, b, 255))
 
-    # Subtle diagonal golden light streaks
-    for idx, base_x in enumerate([-180, 320, 820]):
-        shift_x = int(base_x + 36 * math.sin(2.0 * math.pi * 0.45 * t + idx))
-        poly = [
-            (shift_x, 0),
-            (shift_x + 130, 0),
-            (shift_x - 210, VIDEO_HEIGHT),
-            (shift_x - 340, VIDEO_HEIGHT),
-        ]
-        draw.polygon(poly, fill=(250, 204, 21, 11))
-
-    # Glowing orbs behind logo and lower CTA zone
-    orb1_r = int(310 + 34 * math.sin(2.0 * math.pi * 1.1 * t))
+    orb_r = int(295 + 14 * math.sin(2.0 * math.pi * 0.65 * t))
     draw.ellipse(
-        [VIDEO_WIDTH // 2 - orb1_r, 430 - orb1_r, VIDEO_WIDTH // 2 + orb1_r, 430 + orb1_r],
-        fill=(16, 185, 129, 36),
-    )
-    orb2_r = int(260 + 28 * math.cos(2.0 * math.pi * 1.0 * t))
-    draw.ellipse(
-        [VIDEO_WIDTH // 2 - orb2_r, 1280 - orb2_r, VIDEO_WIDTH // 2 + orb2_r, 1280 + orb2_r],
-        fill=(250, 204, 21, 18),
+        [VIDEO_WIDTH // 2 - orb_r, 435 - orb_r, VIDEO_WIDTH // 2 + orb_r, 435 + orb_r],
+        fill=(16, 185, 129, 32),
     )
 
-    # Outer & inner premium frame border
     draw.rounded_rectangle(
-        [28, 28, VIDEO_WIDTH - 28, VIDEO_HEIGHT - 28],
-        radius=54,
-        outline=(250, 204, 21, 95),
-        width=3,
-    )
-    draw.rounded_rectangle(
-        [44, 44, VIDEO_WIDTH - 44, VIDEO_HEIGHT - 44],
-        radius=44,
-        outline=(255, 255, 255, 35),
-        width=1,
+        [32, 32, VIDEO_WIDTH - 32, VIDEO_HEIGHT - 32],
+        radius=48,
+        outline=(250, 204, 21, 85),
+        width=2,
     )
     return bg
 
@@ -653,8 +717,8 @@ def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUT
 
     bn_tag = find_font(BENGALI_FONT_PATHS, 28)
     en_tag = find_font(LATIN_FONT_PATHS, 26)
-    bn_h1 = find_font(BENGALI_FONT_PATHS, 54)
-    en_h1 = find_font(LATIN_FONT_PATHS, 50)
+    bn_h1 = find_font(BENGALI_FONT_PATHS, 52)
+    en_h1 = find_font(LATIN_FONT_PATHS, 48)
     bn_pill = find_font(BENGALI_FONT_PATHS, 31)
     en_pill = find_font(LATIN_FONT_PATHS, 29)
     bn_sub = find_font(BENGALI_FONT_PATHS, 35)
@@ -672,28 +736,21 @@ def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUT
     for f_idx in range(n_frames):
         t = f_idx / FPS
 
-        p_logo = min(1.0, t / 0.65)
-        logo_pop = _elastic_ease_out(p_logo)
+        entry_alpha = _smooth_ease_out(min(1.0, t / 0.55))
+        ease_h1 = _smooth_ease_out(max(0.0, min(1.0, (t - 0.15) / 0.50)))
+        ease_sub = _smooth_ease_out(max(0.0, min(1.0, (t - 0.55) / 0.55)))
+        ease_dom = _smooth_ease_out(max(0.0, min(1.0, (t - 0.80) / 0.55)))
 
-        p_fast = min(1.0, max(0.0, (t - 0.20) / 0.50))
-        ease_fast = 1.0 - (1.0 - p_fast) ** 3
+        breath = 1.0 + 0.014 * math.sin(2.0 * math.pi * 0.85 * t)
+        dom_glow_alpha = int(135 + 45 * math.sin(2.0 * math.pi * 1.0 * t))
 
-        p_slow = min(1.0, max(0.0, (t - 0.85) / 0.65))
-        ease_slow = 1.0 - (1.0 - p_slow) ** 3
+        fade_factor = 1.0
+        if duration - t < 0.60:
+            fade_factor = max(0.0, (duration - t) / 0.60)
 
-        p_dom = min(1.0, max(0.0, (t - 1.15) / 0.65))
-        ease_dom = _elastic_ease_out(p_dom)
-
-        pulse = 1.0 + 0.035 * math.sin(2.0 * math.pi * 1.3 * t)
-        dom_glow_alpha = int(140 + 85 * math.sin(2.0 * math.pi * 1.6 * t))
-        fade_out_alpha = 1.0
-        if duration - t < 0.35:
-            fade_out_alpha = max(0.0, (duration - t) / 0.35)
-
-        img = _draw_premium_outro_backdrop(t)
+        img = _draw_smooth_outro_backdrop(t)
         draw = ImageDraw.Draw(img)
 
-        # Top brand pill
         top_pill_w, top_pill_h = 370, 56
         tpx0 = (VIDEO_WIDTH - top_pill_w) // 2
         tpy0 = 155
@@ -701,54 +758,51 @@ def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUT
             [tpx0, tpy0, tpx0 + top_pill_w, tpy0 + top_pill_h],
             radius=28,
             fill=(12, 74, 57, 225),
-            outline=(250, 204, 21, 180),
+            outline=(250, 204, 21, 175),
             width=2,
         )
         top_label = "HOME BD INFO • শর্টস"
         tlw = measure_mixed_text_width(draw, top_label, bn_tag, en_tag)
         render_mixed_text_line(draw, (VIDEO_WIDTH - tlw) // 2, tpy0 + 11, top_label, bn_tag, en_tag, fill=(250, 204, 21, 255))
 
-        # Center logo medallion with rotating/pulsing gold ring
         cy = 285
         ring_cx, ring_cy = VIDEO_WIDTH // 2, cy + 125
-        outer_ring_r = int(148 * pulse)
+        outer_ring_r = int(146 * breath)
         draw.ellipse(
             [ring_cx - outer_ring_r, ring_cy - outer_ring_r, ring_cx + outer_ring_r, ring_cy + outer_ring_r],
-            outline=(250, 204, 21, 220),
-            width=5,
+            outline=(250, 204, 21, 210),
+            width=4,
         )
-        inner_ring_r = int(124 * (1.0 + 0.015 * math.cos(2.0 * math.pi * 1.5 * t)))
+        inner_ring_r = 124
         draw.ellipse(
             [ring_cx - inner_ring_r, ring_cy - inner_ring_r, ring_cx + inner_ring_r, ring_cy + inner_ring_r],
             fill=(255, 255, 255, 250),
-            outline=(16, 185, 129, 200),
+            outline=(16, 185, 129, 195),
             width=3,
         )
 
         if logo_src is not None:
-            logo_scale = max(0.25, logo_pop) * pulse
+            logo_scale = (0.90 + 0.10 * entry_alpha) * breath
             lw = max(24, int(190 * logo_scale))
             lh = max(24, int(logo_src.height * (lw / logo_src.width)))
             resized_logo = logo_src.resize((lw, lh), Image.Resampling.LANCZOS)
             img.paste(resized_logo, (ring_cx - lw // 2, ring_cy - lh // 2), resized_logo)
 
-        # Glassmorphic showcase card for CTA & domain
         card_x0, card_y0 = 64, 625
         card_x1, card_y1 = VIDEO_WIDTH - 64, 1525
         draw.rounded_rectangle(
             [card_x0, card_y0, card_x1, card_y1],
             radius=40,
-            fill=(8, 42, 33, 215),
-            outline=(250, 204, 21, 130),
+            fill=(8, 42, 33, 220),
+            outline=(250, 204, 21, 125),
             width=3,
         )
 
         h1 = "তথ্যটি উপকারী মনে হলে"
         w1 = measure_mixed_text_width(draw, h1, bn_h1, en_h1)
-        h1_y = int(card_y0 + 58 + (1.0 - ease_fast) * 36)
+        h1_y = int(card_y0 + 58 + (1.0 - ease_h1) * 24)
         render_mixed_text_line(draw, (VIDEO_WIDTH - w1) // 2, h1_y, h1, bn_h1, en_h1, fill=(255, 255, 255, 255))
 
-        # 4 clean 2x2 action pills with pure geometric icons (zero missing font glyphs)
         grid_top = card_y0 + 168
         pill_w, pill_h = 410, 88
         gap_x, gap_y = 26, 22
@@ -758,41 +812,39 @@ def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUT
         for idx, (label_bn, accent_rgba) in enumerate(action_items):
             r_idx = idx // 2
             c_idx = idx % 2
-            p_item = min(1.0, max(0.0, (t - (0.35 + idx * 0.10)) / 0.45))
-            item_pop = _elastic_ease_out(p_item)
-            item_wave = 1.0 + 0.022 * math.sin(2.0 * math.pi * 1.7 * max(0.0, t - 0.9) + idx * 0.8)
-            sc = (0.78 + 0.22 * max(0.0, item_pop)) * item_wave
+            p_item = _smooth_ease_out(max(0.0, min(1.0, (t - (0.25 + idx * 0.08)) / 0.45)))
+            subtle_float = 1.0 + 0.010 * math.sin(2.0 * math.pi * 1.0 * max(0.0, t - 0.8) + idx * 0.7)
+            sc = (0.94 + 0.06 * p_item) * subtle_float
 
             pw = int(pill_w * sc)
             ph = int(pill_h * sc)
             base_px = grid_left + c_idx * (pill_w + gap_x)
             base_py = grid_top + r_idx * (pill_h + gap_y)
             px0 = base_px + (pill_w - pw) // 2
-            py0 = base_py + (pill_h - ph) // 2
+            py0 = int(base_py + (1.0 - p_item) * 16 + (pill_h - ph) // 2)
 
             draw.rounded_rectangle(
                 [px0, py0, px0 + pw, py0 + ph],
                 radius=max(12, ph // 2),
                 fill=(15, 68, 53, 240),
-                outline=(250, 204, 21, 175),
+                outline=(250, 204, 21, 170),
                 width=2,
             )
 
-            # Geometric badge icon on left of each pill
             badge_r = max(12, int(24 * sc))
             bcx = px0 + int(48 * sc)
             bcy = py0 + ph // 2
             draw.ellipse([bcx - badge_r, bcy - badge_r, bcx + badge_r, bcy + badge_r], fill=accent_rgba)
-            if idx == 0:  # Like: crisp star/diamond mark
+            if idx == 0:
                 d_r = max(6, int(10 * sc))
                 draw.polygon([(bcx, bcy - d_r), (bcx + d_r, bcy), (bcx, bcy + d_r), (bcx - d_r, bcy)], fill=(255, 255, 255, 255))
-            elif idx == 1:  # Comment: chat dot
+            elif idx == 1:
                 d_r = max(6, int(9 * sc))
                 draw.ellipse([bcx - d_r, bcy - d_r, bcx + d_r, bcy + d_r], fill=(255, 255, 255, 255))
-            elif idx == 2:  # Share: right triangle arrow
+            elif idx == 2:
                 d_r = max(6, int(10 * sc))
                 draw.polygon([(bcx - d_r // 2, bcy - d_r), (bcx + d_r, bcy), (bcx - d_r // 2, bcy + d_r)], fill=(255, 255, 255, 255))
-            else:  # Follow: plus cross
+            else:
                 d_r = max(6, int(10 * sc))
                 lw_plus = max(2, int(4 * sc))
                 draw.line([(bcx - d_r, bcy), (bcx + d_r, bcy)], fill=(255, 255, 255, 255), width=lw_plus)
@@ -809,28 +861,26 @@ def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUT
                 fill=(255, 255, 255, 255),
             )
 
-        # Divider line
         div_y = grid_top + pill_h * 2 + gap_y + 38
         draw.line([(card_x0 + 90, div_y), (card_x1 - 90, div_y)], fill=(250, 204, 21, 90), width=2)
 
         sub_txt = "বিস্তারিত গাইড ও লিংক পেতে ভিজিট করুন"
         sw = measure_mixed_text_width(draw, sub_txt, bn_sub, en_sub)
-        sub_y = int(div_y + 30 + (1.0 - ease_slow) * 32)
+        sub_y = int(div_y + 30 + (1.0 - ease_sub) * 20)
         render_mixed_text_line(draw, (VIDEO_WIDTH - sw) // 2, sub_y, sub_txt, bn_sub, en_sub, fill=(226, 232, 240, 255))
 
-        # Premium glowing domain button
         dw, dh = 720, 108
-        dom_scale = 0.82 + 0.18 * max(0.0, ease_dom)
+        dom_scale = 0.94 + 0.06 * ease_dom
         cur_dw = int(dw * dom_scale)
         cur_dh = int(dh * dom_scale)
         dx0 = (VIDEO_WIDTH - cur_dw) // 2
-        dy0 = int(div_y + 92 + (1.0 - min(1.0, ease_dom)) * 36 + (dh - cur_dh) // 2)
+        dy0 = int(div_y + 92 + (1.0 - ease_dom) * 22 + (dh - cur_dh) // 2)
 
         draw.rounded_rectangle(
-            [dx0 - 7, dy0 - 7, dx0 + cur_dw + 7, dy0 + cur_dh + 7],
-            radius=max(16, (cur_dh + 14) // 2),
+            [dx0 - 6, dy0 - 6, dx0 + cur_dw + 6, dy0 + cur_dh + 6],
+            radius=max(16, (cur_dh + 12) // 2),
             outline=(250, 204, 21, dom_glow_alpha),
-            width=4,
+            width=3,
         )
         draw.rounded_rectangle(
             [dx0, dy0, dx0 + cur_dw, dy0 + cur_dh],
@@ -843,9 +893,9 @@ def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUT
         dom_w = measure_mixed_text_width(draw, dom_txt, bn_dom, en_dom)
         render_mixed_text_line(draw, (VIDEO_WIDTH - dom_w) // 2, dy0 + 25, dom_txt, bn_dom, en_dom, fill=(255, 255, 255, 255))
 
-        if fade_out_alpha < 1.0:
-            blackout = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (4, 34, 28, int((1.0 - fade_out_alpha) * 235)))
-            img = Image.alpha_composite(img, blackout)
+        if fade_factor < 1.0:
+            fade_overlay = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (5, 38, 30, int((1.0 - fade_factor) * 220)))
+            img = Image.alpha_composite(img, fade_overlay)
 
         frame_path = os.path.join(frames_dir, f"outro_{f_idx:04d}.png")
         img.convert("RGB").save(frame_path, "PNG")
@@ -1232,6 +1282,7 @@ def build_subtitle_overlay_track(kinetic_segments: List[Dict], voice_dur: float,
 
 
 def build_final_video(
+    yt_title: str,
     screenshot_png: str,
     screenshot_h: int,
     voice_wav: str,
@@ -1253,6 +1304,10 @@ def build_final_video(
     voice_dur = float(probe.stdout.strip())
     total_duration = voice_dur + OUTRO_DURATION
 
+    hook_line = kinetic_segments[0]["text"] if kinetic_segments else yt_title
+    hook_mp4 = os.path.join(work_dir, "hook_banner.mp4")
+    create_hook_banner_clip(yt_title, hook_line, screenshot_png, hook_mp4, duration=min(HOOK_DURATION, voice_dur))
+
     watermark_png = os.path.join(work_dir, "watermark_pill.png")
     outro_mp4 = os.path.join(work_dir, "outro_animated.mp4")
     create_minimal_watermark_png(watermark_png)
@@ -1261,8 +1316,14 @@ def build_final_video(
 
     base_mp4 = os.path.join(work_dir, "base_layer.mp4")
     base_inputs = ["-loop", "1", "-t", f"{voice_dur:.2f}", "-i", screenshot_png]
-    clip_indices = []
     next_i = 1
+    hook_idx = None
+    if os.path.exists(hook_mp4):
+        base_inputs.extend(["-i", hook_mp4])
+        hook_idx = next_i
+        next_i += 1
+
+    clip_indices = []
     for cp in visual_clips[:4]:
         if os.path.exists(cp):
             base_inputs.extend(["-stream_loop", "-1", "-t", f"{voice_dur:.2f}", "-i", cp])
@@ -1274,14 +1335,21 @@ def build_final_video(
         f"[0:v]crop={VIDEO_WIDTH}:{VIDEO_HEIGHT}:0:'min({scroll_dist}, {scroll_dist}*(t/{max(1.0, voice_dur):.2f}))'[site_bg]"
     ]
     last_v = "site_bg"
-    scene_windows = [
-        (0.0, HOOK_DURATION),
+
+    if hook_idx is not None:
+        hook_end = min(HOOK_DURATION, voice_dur)
+        base_filters.append(
+            f"[{last_v}][{hook_idx}:v]overlay=0:0:enable='between(t,0,{hook_end:.2f})'[v_hook]"
+        )
+        last_v = "v_hook"
+
+    mid_windows = [
         (9.0, 15.0),
         (20.0, 26.0),
         (30.5, voice_dur),
     ]
     if clip_indices:
-        for s_i, (win_start, win_end) in enumerate(scene_windows):
+        for s_i, (win_start, win_end) in enumerate(mid_windows):
             if win_start >= voice_dur:
                 break
             actual_end = min(win_end, voice_dur)
@@ -1329,13 +1397,13 @@ def build_final_video(
         f"[v_outro][thumb_cover]overlay=0:0:enable='between(t,0,{COVER_DURATION:.2f})'[v_final]",
     ]
     if bgm_idx is not None:
-        outro_fade_start = max(0.0, OUTRO_DURATION - 1.2)
+        outro_fade_out_start = max(0.0, OUTRO_DURATION - 1.2)
         f_parts.extend([
             f"[{bgm_idx}:a]atrim=0:{voice_dur:.2f},volume={BGM_VOICE_VOLUME},afade=t=in:st=0:d=0.6[bgm_body]",
-            f"[{bgm_idx}:a]atrim={voice_dur:.2f}:{total_duration:.2f},asetpts=PTS-STARTPTS,volume={BGM_OUTRO_VOLUME},afade=t=out:st={outro_fade_start:.2f}:d=1.2[bgm_outro]",
+            f"[{bgm_idx}:a]atrim={voice_dur:.2f}:{total_duration:.2f},asetpts=PTS-STARTPTS,volume={BGM_OUTRO_VOLUME},afade=t=out:st={outro_fade_out_start:.2f}:d=1.2[bgm_outro]",
             f"[bgm_body][bgm_outro]concat=n=2:v=0:a=1[bgm_clean]",
             f"[1:a]apad=pad_dur={OUTRO_DURATION:.2f}[v_pad]",
-            f"[v_pad][bgm_clean]amix=inputs=2:duration=first:weights='1.0 1.0':dropout_transition=2,volume=1.15[a_final]",
+            f"[v_pad][bgm_clean]amix=inputs=2:duration=first:weights='1.0 1.0':dropout_transition=2,volume=1.08[a_final]",
         ])
     else:
         f_parts.append(f"[1:a]apad=pad_dur={OUTRO_DURATION:.2f}[a_final]")
@@ -1554,6 +1622,7 @@ def main():
 
             print("5. Rendering clean final video...")
             build_final_video(
+                yt_title=yt_title,
                 screenshot_png=screenshot_png,
                 screenshot_h=sc_height,
                 voice_wav=voice_wav,
