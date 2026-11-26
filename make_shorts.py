@@ -554,15 +554,17 @@ def create_hook_banner_clip(
     del sc, bg_crop, bg_blur, dark_scrim, base, draw
     gc.collect()
 
+    n_frames = max(1, int(round(duration * FPS)))
     subprocess.run(
         [
-            "ffmpeg", "-y", "-threads", "2", "-loop", "1", "-t", f"{duration:.2f}", "-i", hook_png,
+            "ffmpeg", "-y", "-threads", "2", "-loop", "1", "-i", hook_png,
             "-vf", (
-                f"scale=w='trunc({VIDEO_WIDTH}(1+0.03*(t/{duration:.2f}))/2)*2':h=-2,"
-                f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT}:(iw-{VIDEO_WIDTH})/2:(ih-{VIDEO_HEIGHT})/2"
+                f"scale={VIDEO_WIDTH * 2}:{VIDEO_HEIGHT * 2},"
+                f"zoompan=z='1+0.03*(on/{max(1, n_frames)})':x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2'"
+                f":d={n_frames}:s={VIDEO_WIDTH}x{VIDEO_HEIGHT}:fps={FPS}"
             ),
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-pix_fmt", "yuv420p",
-            "-r", str(FPS), "-t", f"{duration:.2f}", out_mp4,
+            "-t", f"{duration:.2f}", out_mp4,
         ],
         check=True,
         stdout=subprocess.DEVNULL,
@@ -927,15 +929,17 @@ def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUT
 
 
 def _encode_lightweight_motion_clip(image_path: str, out_mp4: str, duration: int = 8):
+    n_frames = max(1, int(round(duration * FPS)))
     subprocess.run(
         [
-            "ffmpeg", "-y", "-threads", "2", "-loop", "1", "-t", str(duration), "-i", image_path,
+            "ffmpeg", "-y", "-threads", "2", "-loop", "1", "-i", image_path,
             "-vf", (
-                f"scale=w='trunc({VIDEO_WIDTH}(1+0.07*(t/{duration}))/2)*2':h=-2,"
-                f"crop={VIDEO_WIDTH}:{VIDEO_HEIGHT}:(iw-{VIDEO_WIDTH})/2:(ih-{VIDEO_HEIGHT})/2"
+                f"scale={VIDEO_WIDTH * 2}:{VIDEO_HEIGHT * 2},"
+                f"zoompan=z='1+0.07*(on/{max(1, n_frames)})':x='iw/2-(iw/zoom)/2':y='ih/2-(ih/zoom)/2'"
+                f":d={n_frames}:s={VIDEO_WIDTH}x{VIDEO_HEIGHT}:fps={FPS}"
             ),
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
-            "-r", str(FPS), "-t", str(duration), out_mp4,
+            "-t", str(duration), out_mp4,
         ],
         check=True,
         stdout=subprocess.DEVNULL,
