@@ -17,14 +17,15 @@ import edge_tts
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from playwright.sync_api import sync_playwright
 
-VOICE_NAME = "bn-BD-PradeepNeural"
-SECONDARY_VOICE_NAME = "bn-BD-NabanitaNeural"
+# Voice settings: NabanitaNeural + Pitch shift (+8Hz) for a crisp, vibrant sound
+VOICE_NAME = "bn-BD-NabanitaNeural"
+SECONDARY_VOICE_NAME = "bn-BD-PradeepNeural"
 GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "mainfouser/bangla-shorts-bot")
 SHEET_NAME = "Shorts_Queue"
 BGM_FILE = "bgm.mp3"
 LOGO_FILE = "logo.png"
 
-# BGM volume: soft & smooth under voiceover, gentle swell in outro without sudden jump
+# BGM volume settings
 BGM_VOICE_VOLUME = 0.065
 BGM_OUTRO_VOLUME = 0.105
 
@@ -137,7 +138,7 @@ def clean_voiceover_script(text: str) -> str:
 
     text = re.sub(r"https?://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=]+", _replace_url, text)
     text = re.sub(
-        r"\b(?:[a-z0-9-]+\.)+(?:gov\.bd|com\.bd|org\.bd|edu\.bd|bd|com|org|net|info)\b",
+        r"(?:[a-z0-9-]+\.)+(?:gov\.bd|com\.bd|org\.bd|edu\.bd|bd|com|org|net|info)",
         lambda m: _spell_domain_for_tts(m.group(0)),
         text,
         flags=re.IGNORECASE,
@@ -192,27 +193,27 @@ def get_expressive_prosody(clause_info: Dict) -> Tuple[str, str, float]:
     pause = 0.34 if is_end else 0.14
 
     if is_hook:
-        return "+3%", "+2Hz", 0.32
+        return "+3%", "+10Hz", 0.32
 
     if "?" in txt or any(w in txt for w in ["কীভাবে", "কেন", "কী", "কত", "কখন", "আদৌ"]):
-        return "+1%", "+3Hz", pause + 0.04
+        return "+1%", "+12Hz", pause + 0.04
 
     if any(w in txt for w in ["সতর্ক", "জরুরি", "অবশ্যই", "মনে রাখবেন", "ভুল", "জরিমানা", "আইন", "নিষেধ", "বাতিল"]):
-        return "-5%", "-1Hz", pause + 0.05
+        return "-3%", "+6Hz", pause + 0.05
 
     if any(w in txt for w in ["প্রথম", "দ্বিতীয়", "তৃতীয়", "ধাপ", "ক্যাটাগরি", "সবুজ", "হলুদ", "কমলা", "লাল"]):
-        return "-3%", "+1Hz", pause + 0.03
+        return "-2%", "+8Hz", pause + 0.03
 
     if s_idx >= max(1, total_s - 1) and is_end:
-        return "-4%", "-1Hz", 0.40
+        return "-3%", "+6Hz", 0.38
 
     pattern_idx = (s_idx + (0 if is_end else 1)) % 3
     if pattern_idx == 0:
-        return "-2%", "+1Hz", pause
+        return "-1%", "+9Hz", pause
     elif pattern_idx == 1:
-        return "-4%", "+0Hz", pause
+        return "-3%", "+7Hz", pause
     else:
-        return "-1%", "+2Hz", pause
+        return "-1%", "+10Hz", pause
 
 
 async def _synthesize_phrase(text: str, out_path: str, rate: str, pitch: str, voice: str = VOICE_NAME):
@@ -311,7 +312,8 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
     concat_list = os.path.join(work_dir, "audio_concat.txt")
     with open(concat_list, "w", encoding="utf-8") as f:
         for sf in segment_files:
-            f.write(f"file '{sf}'\n")
+            f.write(f"file '{sf}'
+")
 
     raw_concat_wav = os.path.join(work_dir, "voiceover_raw.wav")
     final_voice_wav = os.path.join(work_dir, "voiceover_full.wav")
@@ -327,8 +329,8 @@ def generate_natural_voiceover(script: str, work_dir: str) -> Tuple[str, List[Di
         [
             "ffmpeg", "-y", "-threads", "2", "-i", raw_concat_wav,
             "-af", (
-                "highpass=f=80,equalizer=f=200:t=q:w=1.0:g=2.0,"
-                "equalizer=f=2800:t=q:w=1.5:g=1.2,"
+                "highpass=f=100,equalizer=f=250:t=q:w=1.0:g=-1.5,"
+                "equalizer=f=3200:t=q:w=1.5:g=2.0,"
                 "acompressor=threshold=-18dB:ratio=2.2:attack=8:release=100,"
                 "loudnorm=I=-15.5:TP=-1.5:LRA=11"
             ),
@@ -501,7 +503,7 @@ def create_hook_banner_clip(
 
     badge_w, badge_h = 430, 62
     bx0 = (VIDEO_WIDTH - badge_w) // 2
-    by0 = 250
+    by0 = 240
     draw.rounded_rectangle(
         [bx0, by0, bx0 + badge_w, by0 + badge_h],
         radius=31,
@@ -513,8 +515,22 @@ def create_hook_banner_clip(
     bw = measure_mixed_text_width(draw, b_txt, bn_badge, en_badge)
     render_mixed_text_line(draw, (VIDEO_WIDTH - bw) // 2, by0 + 13, b_txt, bn_badge, en_badge, fill=(6, 36, 28, 255))
 
-    card_x0, card_y0 = 64, 355
-    card_x1, card_y1 = VIDEO_WIDTH - 64, 1160
+    clean_title = re.sub(r"#\w+", "", title).strip()
+    bn_t = find_font(BENGALI_FONT_PATHS, 54)
+    en_t = find_font(LATIN_FONT_PATHS, 50)
+    t_lines = wrap_text_by_pixel(draw, clean_title, bn_t, en_t, VIDEO_WIDTH - 200)[:3]
+
+    clean_hook = re.sub(r"[•✔*#]+", "", hook_line).strip()
+    bn_h = find_font(BENGALI_FONT_PATHS, 40)
+    en_h = find_font(LATIN_FONT_PATHS, 38)
+    h_lines = wrap_text_by_pixel(draw, clean_hook, bn_h, en_h, VIDEO_WIDTH - 210)[:3]
+
+    title_block_h = len(t_lines) * 74
+    hook_block_h = len(h_lines) * 54
+    card_h = 54 + title_block_h + 36 + hook_block_h + 50
+    card_x0, card_y0 = 64, 340
+    card_x1, card_y1 = VIDEO_WIDTH - 64, card_y0 + card_h
+
     draw.rounded_rectangle(
         [card_x0, card_y0, card_x1, card_y1],
         radius=36,
@@ -523,31 +539,20 @@ def create_hook_banner_clip(
         width=3,
     )
 
-    clean_title = re.sub(r"#\w+", "", title).strip()
-    bn_t = find_font(BENGALI_FONT_PATHS, 56)
-    en_t = find_font(LATIN_FONT_PATHS, 52)
-    t_lines = wrap_text_by_pixel(draw, clean_title, bn_t, en_t, VIDEO_WIDTH - 200)[:3]
-
-    cur_y = card_y0 + 54
+    cur_y = card_y0 + 50
     for i, ln in enumerate(t_lines):
         lw = measure_mixed_text_width(draw, ln, bn_t, en_t)
         col = (250, 204, 21, 255) if i == 0 else (255, 255, 255, 255)
         render_mixed_text_line(draw, (VIDEO_WIDTH - lw) // 2, cur_y, ln, bn_t, en_t, fill=col)
-        cur_y += 76
+        cur_y += 74
 
-    draw.line([(card_x0 + 60, cur_y + 18), (card_x1 - 60, cur_y + 18)], fill=(250, 204, 21, 110), width=2)
-    cur_y += 52
+    draw.line([(card_x0 + 60, cur_y + 12), (card_x1 - 60, cur_y + 12)], fill=(250, 204, 21, 110), width=2)
+    cur_y += 42
 
-    clean_hook = re.sub(r"[•✔*#]+", "", hook_line).strip()
-    bn_h = find_font(BENGALI_FONT_PATHS, 40)
-    en_h = find_font(LATIN_FONT_PATHS, 38)
-    h_lines = wrap_text_by_pixel(draw, clean_hook, bn_h, en_h, VIDEO_WIDTH - 210)[:3]
     for hl in h_lines:
-        if cur_y > card_y1 - 75:
-            break
         hw = measure_mixed_text_width(draw, hl, bn_h, en_h)
         render_mixed_text_line(draw, (VIDEO_WIDTH - hw) // 2, cur_y, hl, bn_h, en_h, fill=(226, 232, 240, 255))
-        cur_y += 56
+        cur_y += 54
 
     hook_png = os.path.join(os.path.dirname(out_mp4), "hook_card.png")
     base.convert("RGB").save(hook_png, "PNG")
@@ -746,10 +751,6 @@ def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUT
         breath = 1.0 + 0.014 * math.sin(2.0 * math.pi * 0.85 * t)
         dom_glow_alpha = int(135 + 45 * math.sin(2.0 * math.pi * 1.0 * t))
 
-        fade_factor = 1.0
-        if duration - t < 0.60:
-            fade_factor = max(0.0, (duration - t) / 0.60)
-
         img = _draw_smooth_outro_backdrop(t)
         draw = ImageDraw.Draw(img)
 
@@ -894,10 +895,6 @@ def build_animated_outro_clip(out_mp4: str, work_dir: str, duration: float = OUT
         dom_txt = "homebdinfo.com"
         dom_w = measure_mixed_text_width(draw, dom_txt, bn_dom, en_dom)
         render_mixed_text_line(draw, (VIDEO_WIDTH - dom_w) // 2, dy0 + 25, dom_txt, bn_dom, en_dom, fill=(255, 255, 255, 255))
-
-        if fade_factor < 1.0:
-            fade_overlay = Image.new("RGBA", (VIDEO_WIDTH, VIDEO_HEIGHT), (5, 38, 30, int((1.0 - fade_factor) * 220)))
-            img = Image.alpha_composite(img, fade_overlay)
 
         frame_path = os.path.join(frames_dir, f"outro_{f_idx:04d}.png")
         img.convert("RGB").save(frame_path, "PNG")
@@ -1094,7 +1091,8 @@ def capture_site_and_extract_images(post_url: str, out_png: str, work_dir: str) 
             lower_src = full_src.lower()
             if any(skip in lower_src for skip in ["logo", "icon", "avatar", "emoji", "banner-ad", "doubleclick"]):
                 continue
-            if item.get("w", 0) >= 260 and item.get("h", 0) >= 150 and full_src not in seen_urls:
+            # Filter out text-heavy TOC infographics if aspect ratio or name suggests TOC
+            if item.get("w", 0) >= 300 and item.get("h", 0) >= 200 and full_src not in seen_urls:
                 seen_urls.add(full_src)
                 image_urls.append(full_src)
 
@@ -1267,9 +1265,12 @@ def build_subtitle_overlay_track(kinetic_segments: List[Dict], voice_dur: float,
 
     with open(concat_file, "w", encoding="utf-8") as f:
         for img_path, dur in entries:
-            f.write(f"file '{img_path}'\n")
-            f.write(f"duration {dur:.3f}\n")
-        f.write(f"file '{entries[-1][0]}'\n")
+            f.write(f"file '{img_path}'
+")
+            f.write(f"duration {dur:.3f}
+")
+        f.write(f"file '{entries[-1][0]}'
+")
 
     sub_mov = os.path.join(work_dir, "kinetic_track.mov")
     subprocess.run(
@@ -1508,10 +1509,16 @@ def send_telegram_for_approval(video_path: str, thumb_path: str, row_num: int, t
         raise RuntimeError("TELEGRAM_BOT_TOKEN বা TELEGRAM_CHAT_ID পাওয়া যায়নি।")
 
     caption = (
-        f"🎬 নতুন Bangla Shorts প্রস্তুত!\n\n"
-        f"📌 শিরোনাম: {title}\n"
-        f"🔗 পোস্ট: {post_url}\n"
-        f"📊 Sheet Row: {row_num}\n\n"
+        f"🎬 নতুন Bangla Shorts প্রস্তুত!
+
+"
+        f"📌 শিরোনাম: {title}
+"
+        f"🔗 পোস্ট: {post_url}
+"
+        f"📊 Sheet Row: {row_num}
+
+"
         f"💡 Approve দিলে ইনস্ট্যান্ট পোস্ট হবে, Schedule-এ সময় দিন, অথবা প্রয়োজন অনুযায়ী Regenerate বা Reject চাপুন।"
     )
     reply_markup = json.dumps(
