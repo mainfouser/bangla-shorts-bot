@@ -17,7 +17,6 @@ import edge_tts
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from playwright.sync_api import sync_playwright
 
-# Male voice settings: PradeepNeural tuned for a confident, TV news/presentation broadcaster tone
 VOICE_NAME = "bn-BD-PradeepNeural"
 SECONDARY_VOICE_NAME = "bn-BD-PradeepNeural"
 GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "mainfouser/bangla-shorts-bot")
@@ -25,7 +24,6 @@ SHEET_NAME = "Shorts_Queue"
 BGM_FILE = "bgm.mp3"
 LOGO_FILE = "logo.png"
 
-# Clean, refined BGM volume so broadcast voice stays front and center
 BGM_VOICE_VOLUME = 0.042
 BGM_OUTRO_VOLUME = 0.075
 
@@ -184,10 +182,6 @@ def split_clauses_for_tts(script: str) -> List[Dict]:
 
 
 def get_tv_presenter_prosody(clause_info: Dict) -> Tuple[str, str, float]:
-    """
-    Calibrated for bn-BD-PradeepNeural to sound like a seasoned TV news/presentation anchor:
-    steady pacing, authoritative low-mid chest resonance, clear articulation, and crisp sentence cadence.
-    """
     txt = clause_info["text"]
     s_idx = clause_info["sent_idx"]
     total_s = clause_info["total_sents"]
